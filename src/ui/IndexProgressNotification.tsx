@@ -26,7 +26,7 @@ const IndexProgressNotification = () => {
                     placement: "bottomRight",
                     closable: false,
                     duration: 0,
-                    message: "Indexing Minecraft Jar...",
+                    message: "Indexing server jar...",
                     description: <IndexProgress />
                 });
             } else if (progress === -1) {

@@ -128,7 +128,7 @@ export const EmptyState = () => {
                             color: "#8c8c8c",
                             lineHeight: "1.8"
                         }}>
-                            <li>The Minecraft jar is downloaded directly from Mojang's servers to your device when you use this tool.</li>
+                            <li>The server jar is downloaded directly from Mojang's servers to your device when you use this tool.</li>
                             <li>Decompilation happens entirely in your browser</li>
                             <li>No Minecraft code or bytecode is redistributed by this website</li>
                             <li>Powered by the <a href="https://github.com/Vineflower/vineflower" target="_blank" rel="noreferrer" style={{ color: "#1890ff" }}>Vineflower</a> decompiler via the <a href="https://www.npmjs.com/package/@run-slicer/vf" target="_blank" rel="noreferrer" style={{ color: "#1890ff" }}>@run-slicer/vf</a> project</li>

@@ -33,7 +33,7 @@ const AboutModal = () => {
             onCancel={handleCancel}
             footer={null}
         >
-            <p>NOTE! This website is not redistributing any Minecraft code or compiled bytecode. The minecraft jar is downloaded directly from Mojang's servers to your device when you use this tool. Check your browser's network requests!</p>
+            <p>NOTE! This website is not redistributing any Minecraft code or compiled bytecode. The server jar is downloaded directly from Mojang's servers to your device when you use this tool. Check your browser's network requests!</p>
             <Eula onAccept={() => aboutModalOpen.next(false)} />
         </Modal>
     );

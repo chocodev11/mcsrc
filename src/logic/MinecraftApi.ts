@@ -169,9 +169,12 @@ async function consumeResponseWithProgress(response: Response, onProgress?: (per
 async function downloadMinecraftJar(version: VersionListEntry, progress: BehaviorSubject<number | undefined>): Promise<MinecraftJar> {
     console.log(`Downloading Minecraft jar for version: ${version.id}`);
     const versionManifest = await fetchVersionManifest(version);
-    const clientUrl = versionManifest.downloads.client.url;
+    const serverDownload = versionManifest.downloads.server;
+    if (!serverDownload?.url) {
+        throw new Error(`No server jar download URL found for version: ${version.id}`);
+    }
 
-    const blob = await cachedFetch(clientUrl, (percent) => {
+    const blob = await cachedFetch(serverDownload.url, (percent) => {
         progress.next(percent);
     });
 

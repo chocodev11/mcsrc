@@ -1,6 +1,6 @@
 # [https://mcsrc.dev/](https://mcsrc.dev/)
 
-Note: This project is not affiliated with Mojang or Microsoft in any way. It does NOT redistribute any Minecraft code or compiled bytecode. The minecraft jar is downloaded directly from Mojang's servers to your browser.
+Note: This project is not affiliated with Mojang or Microsoft in any way. It does NOT redistribute any Minecraft code or compiled bytecode. The server jar is downloaded directly from Mojang's servers to your browser.
 
 ## How to build locally
 

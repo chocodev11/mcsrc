@@ -8,7 +8,7 @@ const ProgressModal = () => {
 
     return (
         <Modal
-            title="Downloading Minecraft Jar"
+            title="Downloading server jar"
             open={progress !== undefined}
             footer={null}
             closable={false}

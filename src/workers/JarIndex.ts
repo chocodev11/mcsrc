@@ -111,7 +111,7 @@ export class JarIndex {
             const startTime = performance.now();
 
             indexProgress.next(0);
-            console.log(`Indexing minecraft jar using ${this.workers.length} workers`);
+            console.log(`Indexing server jar using ${this.workers.length} workers`);
 
             // Initialize all workers in parallel
             await Promise.all(this.workers.map(worker => worker.setWorkerJar(this.minecraftJar.version, this.minecraftJar.blob)));

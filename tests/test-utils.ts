@@ -55,7 +55,7 @@ async function setupNetworkMocking(page: Page) {
                 body: JSON.stringify({
                     id: `26.1-mock-${i}`,
                     downloads: {
-                        client: {
+                        server: {
                             url: `http://localhost:4173/test-data/dummy${i}.jar`
                         }
                     }
