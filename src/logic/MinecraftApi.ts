@@ -68,7 +68,7 @@ export function minecraftJarPipeline(source$: Observable<string | null>): Observ
     ]).pipe(
         map(([version, versions]) => versions.find(v => v.id === version)),
         filter((version) => version !== undefined),
-        tap((version) => console.log(`Opening Minecraft jar ${version.id}`)),
+        tap((version) => console.log(`Opening server jar ${version.id}`)),
         switchMap(version => from(downloadMinecraftJar(version, downloadProgress))),
         shareReplay({ bufferSize: 1, refCount: false })
     );
@@ -167,7 +167,7 @@ async function consumeResponseWithProgress(response: Response, onProgress?: (per
 }
 
 async function downloadMinecraftJar(version: VersionListEntry, progress: BehaviorSubject<number | undefined>): Promise<MinecraftJar> {
-    console.log(`Downloading Minecraft jar for version: ${version.id}`);
+    console.log(`Downloading server jar for version: ${version.id}`);
     const versionManifest = await fetchVersionManifest(version);
     const serverDownload = versionManifest.downloads.server;
     if (!serverDownload?.url) {
@@ -178,9 +178,44 @@ async function downloadMinecraftJar(version: VersionListEntry, progress: Behavio
         progress.next(percent);
     });
 
-    const jar = await openJar(version.id, blob);
+    const { jar, blob: resolvedBlob } = await resolveServerRuntimeJar(version.id, blob);
     progress.next(undefined);
-    return { version: version.id, jar, blob };
+    return { version: version.id, jar, blob: resolvedBlob };
+}
+
+async function resolveServerRuntimeJar(versionId: string, serverBlob: Blob): Promise<{ jar: Jar; blob: Blob; }> {
+    const outerJar = await openJar(versionId, serverBlob);
+    const versionsListEntry = outerJar.entries["META-INF/versions.list"];
+    if (!versionsListEntry) {
+        return { jar: outerJar, blob: serverBlob };
+    }
+
+    const versionsList = new TextDecoder().decode(await versionsListEntry.bytes());
+    const firstLine = versionsList
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .find(line => line.length > 0);
+
+    if (!firstLine) {
+        throw new Error(`Bundled server jar has an empty META-INF/versions.list for version: ${versionId}`);
+    }
+
+    const fields = firstLine.split("\t");
+    const bundledJarPath = fields[2];
+    if (fields.length < 3 || !bundledJarPath) {
+        throw new Error(`Malformed META-INF/versions.list entry for version ${versionId}: ${firstLine}`);
+    }
+
+    const bundledEntryName = `META-INF/versions/${bundledJarPath}`;
+    const bundledJarEntry = outerJar.entries[bundledEntryName];
+    if (!bundledJarEntry) {
+        throw new Error(`Bundled server runtime jar not found: ${bundledEntryName}`);
+    }
+
+    const bundledJarBlob = new Blob([await bundledJarEntry.bytes() as Uint8Array<ArrayBuffer>], { type: "application/java-archive" });
+    const bundledJar = await openJar(versionId, bundledJarBlob);
+    console.log(`Using bundled server runtime jar ${bundledJarPath} for version ${versionId}`);
+    return { jar: bundledJar, blob: bundledJarBlob };
 }
 
 // Hardcode as these are never going to change.
