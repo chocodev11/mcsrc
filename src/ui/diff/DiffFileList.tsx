@@ -82,7 +82,9 @@ const DiffFileList = () => {
                         <span style={{ color: token.colorSuccess, fontSize: '12px', fontWeight: 'bold' }}>+{info.additions}</span>
                     )}
                     {info.state === 'modified' && info.additions === 0 && info.deletions === 0 && (
-                        <span style={{ color: token.colorTextDescription, fontSize: '12px', fontStyle: 'italic' }}>None</span>
+                        <Tag color="default" style={{ marginRight: 0, color: token.colorTextDescription }}>
+                            BYTECODE-ONLY
+                        </Tag>
                     )}
                 </Flex>
             ),
