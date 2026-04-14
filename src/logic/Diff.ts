@@ -20,13 +20,17 @@ export interface DiffSide {
 }
 
 export const leftDownloadProgress = new BehaviorSubject<number | undefined>(undefined);
+export const rightDownloadProgress = new BehaviorSubject<number | undefined>(undefined);
 
 let leftDiff: DiffSide | null = null;
 export function getLeftDiff(): DiffSide {
     if (!leftDiff) {
         leftDiff = {} as DiffSide;
         leftDiff.selectedVersion = diffLeftselectedMinecraftVersion;
-        leftDiff.jar = minecraftJarPipeline(compareVersionSource(diffLeftselectedMinecraftVersion, diffRightselectedMinecraftVersion));
+        leftDiff.jar = minecraftJarPipeline(
+            compareVersionSource(diffLeftselectedMinecraftVersion, diffRightselectedMinecraftVersion),
+            leftDownloadProgress
+        );
         leftDiff.entries = leftDiff.jar.pipe(
             switchMap(jar => from(getEntriesWithCRC(jar)))
         );
@@ -38,7 +42,10 @@ export function getLeftDiff(): DiffSide {
 let rightDiff: DiffSide | null = null;
 export function getRightDiff(): DiffSide {
     if (!rightDiff) {
-        const rightJar = minecraftJarPipeline(compareVersionSource(diffRightselectedMinecraftVersion, diffLeftselectedMinecraftVersion));
+        const rightJar = minecraftJarPipeline(
+            compareVersionSource(diffRightselectedMinecraftVersion, diffLeftselectedMinecraftVersion),
+            rightDownloadProgress
+        );
         rightDiff = {
             selectedVersion: diffRightselectedMinecraftVersion,
             jar: rightJar,

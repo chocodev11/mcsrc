@@ -58,7 +58,10 @@ export const minecraftVersionIds = minecraftVersions.pipe(
 export const downloadProgress = new BehaviorSubject<number | undefined>(undefined);
 
 export const minecraftJar = minecraftJarPipeline(selectedMinecraftVersion);
-export function minecraftJarPipeline(source$: Observable<string | null>): Observable<MinecraftJar> {
+export function minecraftJarPipeline(
+    source$: Observable<string | null>,
+    progress: BehaviorSubject<number | undefined> = downloadProgress
+): Observable<MinecraftJar> {
     return combineLatest([
         source$.pipe(
             filter(id => id !== null),
@@ -69,7 +72,7 @@ export function minecraftJarPipeline(source$: Observable<string | null>): Observ
         map(([version, versions]) => versions.find(v => v.id === version)),
         filter((version) => version !== undefined),
         tap((version) => console.log(`Opening server jar ${version.id}`)),
-        switchMap(version => from(downloadMinecraftJar(version, downloadProgress))),
+        switchMap(version => from(downloadMinecraftJar(version, progress))),
         shareReplay({ bufferSize: 1, refCount: false })
     );
 }
