@@ -1,8 +1,8 @@
-import { BehaviorSubject, combineLatest, from, map, Observable, switchMap, shareReplay } from "rxjs";
-import { minecraftJar, minecraftJarPipeline, type MinecraftJar } from "./MinecraftApi";
-import { currentResult, decompileResultPipeline } from "./Decompiler";
+import { BehaviorSubject, combineLatest, distinctUntilChanged, filter, from, map, Observable, switchMap, shareReplay } from "rxjs";
+import { minecraftJarPipeline, type MinecraftJar } from "./MinecraftApi";
+import { decompileResultPipeline } from "./Decompiler";
 import { calculatedLineChanges } from "./LineChanges";
-import { diffLeftselectedMinecraftVersion, selectedMinecraftVersion } from "./State";
+import { diffLeftselectedMinecraftVersion, diffRightselectedMinecraftVersion } from "./State";
 import type { DecompileResult } from "../workers/decompile/types";
 
 export const hideUnchangedSizes = new BehaviorSubject<boolean>(false);
@@ -26,7 +26,7 @@ export function getLeftDiff(): DiffSide {
     if (!leftDiff) {
         leftDiff = {} as DiffSide;
         leftDiff.selectedVersion = diffLeftselectedMinecraftVersion;
-        leftDiff.jar = minecraftJarPipeline(leftDiff.selectedVersion);
+        leftDiff.jar = minecraftJarPipeline(compareVersionSource(diffLeftselectedMinecraftVersion, diffRightselectedMinecraftVersion));
         leftDiff.entries = leftDiff.jar.pipe(
             switchMap(jar => from(getEntriesWithCRC(jar)))
         );
@@ -38,13 +38,14 @@ export function getLeftDiff(): DiffSide {
 let rightDiff: DiffSide | null = null;
 export function getRightDiff(): DiffSide {
     if (!rightDiff) {
+        const rightJar = minecraftJarPipeline(compareVersionSource(diffRightselectedMinecraftVersion, diffLeftselectedMinecraftVersion));
         rightDiff = {
-            selectedVersion: selectedMinecraftVersion,
-            jar: minecraftJar,
-            entries: minecraftJar.pipe(
+            selectedVersion: diffRightselectedMinecraftVersion,
+            jar: rightJar,
+            entries: rightJar.pipe(
                 switchMap(jar => from(getEntriesWithCRC(jar)))
             ),
-            result: currentResult
+            result: decompileResultPipeline(rightJar)
         };
     }
     return rightDiff;
@@ -65,12 +66,23 @@ export interface ChangeInfo {
 // Clear calculated line changes when diff versions change to prevent stale data
 setTimeout(() => {
     combineLatest([
-        getLeftDiff().selectedVersion,
-        selectedMinecraftVersion
+        diffLeftselectedMinecraftVersion,
+        diffRightselectedMinecraftVersion
     ]).subscribe(() => {
         calculatedLineChanges.next(new Map());
     });
 }, 0);
+
+function compareVersionSource(
+    selected$: Observable<string | null>,
+    otherSelected$: Observable<string | null>
+): Observable<string | null> {
+    return combineLatest([selected$, otherSelected$]).pipe(
+        filter(([selected, otherSelected]) => selected !== null && otherSelected !== null),
+        map(([selected]) => selected),
+        distinctUntilChanged()
+    );
+}
 
 let diffChanges: Observable<Map<string, ChangeInfo>> | null = null;
 export function getDiffChanges(): Observable<Map<string, ChangeInfo>> {

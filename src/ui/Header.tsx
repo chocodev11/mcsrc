@@ -2,7 +2,7 @@ import { Divider, Flex, Select } from "antd";
 import { minecraftVersionIds } from "../logic/MinecraftApi";
 import { useObservable } from "../utils/UseObservable";
 import { SettingsModalButton } from "./SettingsModal";
-import { diffView, selectedMinecraftVersion } from "../logic/State";
+import { diffLeftselectedMinecraftVersion, diffRightselectedMinecraftVersion, diffView, selectedMinecraftVersion } from "../logic/State";
 import { JarDecompilerModalButton } from "./JarDecompilerModal";
 
 const Header = () => {
@@ -42,6 +42,8 @@ const HeaderBody = () => {
                     value={currentVersion || versions?.[0]}
                     onChange={(v) => {
                         if (v == "diff") {
+                            diffLeftselectedMinecraftVersion.next(null);
+                            diffRightselectedMinecraftVersion.next(null);
                             diffView.next(true);
                             return;
                         }

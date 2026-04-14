@@ -24,6 +24,7 @@ export const selectedLines = new BehaviorSubject<SelectedLines | null>(initialSt
 
 export const diffView = new BehaviorSubject<boolean>(false);
 export const diffLeftselectedMinecraftVersion = new BehaviorSubject<string | null>(null);
+export const diffRightselectedMinecraftVersion = new BehaviorSubject<string | null>(null);
 
 // Reset selected lines when file changes (skip initial emission to preserve permalink selection)
 selectedFile.pipe(pairwise()).subscribe(([previousFile, currentFile]) => {

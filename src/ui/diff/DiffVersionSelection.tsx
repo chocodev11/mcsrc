@@ -8,32 +8,31 @@ const DiffVersionSelection = () => {
     const leftVersion = useObservable(getLeftDiff().selectedVersion);
     const rightVersion = useObservable(getRightDiff().selectedVersion);
 
-    if (!leftVersion) {
-        // This will trigger the jar to load
-        getLeftDiff().selectedVersion.next(versions?.[1] || null);
-    }
-
     return (
         <Flex align="center" gap={8}>
             <Select
-                value={leftVersion || versions?.[1]} // Select second version as default for left side
+                value={leftVersion || undefined}
+                placeholder="Select left version"
+                style={{ minWidth: 170 }}
                 onChange={(v) => {
-                    getLeftDiff().selectedVersion.next(v);
+                    getLeftDiff().selectedVersion.next(v ?? null);
                 }}
             >
                 {versions?.map(v => (
-                    <Select.Option key={v} value={v}>{v}</Select.Option>
+                    <Select.Option key={v} value={v} disabled={v === rightVersion}>{v}</Select.Option>
                 ))}
             </Select>
             <span style={{ fontSize: 12, color: '#888' }}>→</span>
             <Select
-                value={rightVersion || versions?.[0]}
+                value={rightVersion || undefined}
+                placeholder="Select right version"
+                style={{ minWidth: 170 }}
                 onChange={(v) => {
-                    getRightDiff().selectedVersion.next(v);
+                    getRightDiff().selectedVersion.next(v ?? null);
                 }}
             >
                 {versions?.map(v => (
-                    <Select.Option key={v} value={v}>{v}</Select.Option>
+                    <Select.Option key={v} value={v} disabled={v === leftVersion}>{v}</Select.Option>
                 ))}
             </Select>
         </Flex>
