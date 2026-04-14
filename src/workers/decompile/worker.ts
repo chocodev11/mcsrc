@@ -9,6 +9,20 @@ let lastPromise: Promise<unknown> | undefined = undefined;
 let _promiseCount = 0;
 export const promiseCount = () => _promiseCount;
 
+let cachedJar: DecompileJar | null = null;
+let cachedJarKey: string | null = null;
+
+async function ensureJar(jarName: string, jarBlob: Blob): Promise<DecompileJar> {
+    const jarKey = `${jarName}:${jarBlob.size}:${jarBlob.type}`;
+    if (cachedJar && cachedJarKey === jarKey) {
+        return cachedJar;
+    }
+
+    cachedJar = new DecompileJar(await openJar(jarName, jarBlob));
+    cachedJarKey = jarKey;
+    return cachedJar;
+}
+
 async function schedule<T>(fn: () => Promise<T>): Promise<T> {
     try {
         _promiseCount++;
@@ -87,7 +101,7 @@ export const decompileMany = (
     logger?: (index: number) => Promise<void> | void,
 ): Promise<number> => schedule(async () => {
     const state = new Uint32Array(sab);
-    const jar = new DecompileJar(await openJar(jarName, jarBlob));
+    const jar = await ensureJar(jarName, jarBlob);
 
     let logPromises: Promise<void>[] = [];
     let nameLogger;
@@ -96,7 +110,7 @@ export const decompileMany = (
         nameLogger = (className: string) => {
             if (!class2index) return;
             const i = class2index.get(className);
-            if (i) logPromises.push(Promise.resolve(logger!(i)));
+            if (i !== undefined) logPromises.push(Promise.resolve(logger!(i)));
         };
     }
 
@@ -105,7 +119,8 @@ export const decompileMany = (
         const i = Atomics.add(state, 0, splits);
         if (i >= classNames.length) break;
 
-        const targetClassNames: string[] = [];
+        const splitClassChecksums: [string, number][] = [];
+        const lookupKeys: [string, number, string][] = [];
         for (let j = 0; j < splits; j++) {
             if ((i + j) >= classNames.length) break;
 
@@ -113,12 +128,25 @@ export const decompileMany = (
             const checksum = jar.proxy[className]?.checksum;
             if (!checksum) continue;
 
-            const dbCount = await db.results3
-                .where("[className+checksum+language]")
-                .equals([className, checksum, "java"])
-                .count();
+            splitClassChecksums.push([className, checksum]);
+            lookupKeys.push([className, checksum, "java"]);
+        }
 
-            if (dbCount >= 1) {
+        if (lookupKeys.length === 0) {
+            continue;
+        }
+
+        const cachedResults = await db.results3.bulkGet(lookupKeys);
+        const cachedClassNames = new Set<string>();
+        for (const result of cachedResults) {
+            if (result) {
+                cachedClassNames.add(result.className);
+            }
+        }
+
+        const targetClassNames: string[] = [];
+        for (const [className] of splitClassChecksums) {
+            if (cachedClassNames.has(className)) {
                 nameLogger?.(className);
             } else {
                 targetClassNames.push(className);
@@ -145,7 +173,7 @@ export const decompile = (
     jarBlob: Blob,
 ): Promise<DecompileResult> => schedule(async () => {
     try {
-        const jar = new DecompileJar(await openJar(jarName, jarBlob));
+        const jar = await ensureJar(jarName, jarBlob);
         const checksum = jar.proxy[className]?.checksum;
         const dbResult = await db.results3.get([className, checksum, "java"]);
         if (dbResult) return dbResult;
