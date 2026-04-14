@@ -1,5 +1,5 @@
-import { Table, Tag, Input, Button, Flex, theme, Checkbox, Tooltip, Layout, Space } from 'antd';
-import { SplitCellsOutlined, AlignLeftOutlined, EyeOutlined, EyeInvisibleOutlined, CodeOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Table, Tag, Input, Button, Flex, theme, Tooltip, Layout, Tree } from 'antd';
+import { SplitCellsOutlined, AlignLeftOutlined, EyeOutlined, EyeInvisibleOutlined, CodeOutlined, FileTextOutlined, UnorderedListOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import DiffVersionSelection from './DiffVersionSelection';
 import {
     getDiffChanges,
@@ -13,10 +13,11 @@ import { BehaviorSubject, map, combineLatest } from 'rxjs';
 import { useObservable } from '../../utils/UseObservable';
 import type { SearchProps } from 'antd/es/input';
 import { isDecompiling } from "../../logic/Decompiler.ts";
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { bytecode, unifiedDiff } from "../../logic/Settings.ts";
 import { selectedFile, diffView } from '../../logic/State.ts';
 import { openTab } from '../../logic/Tabs.ts';
+import type { TreeDataNode } from 'antd';
 
 const statusColors: Record<ChangeState, string> = {
     modified: 'gold',
@@ -30,6 +31,11 @@ interface DiffEntry {
     key: string;
     file: string;
     statusInfo: ChangeInfo;
+}
+
+interface DiffTreeData {
+    treeData: TreeDataNode[];
+    folderKeys: string[];
 }
 
 const entries = combineLatest([getDiffChanges(), searchQuery]).pipe(
@@ -49,15 +55,96 @@ const entries = combineLatest([getDiffChanges(), searchQuery]).pipe(
     })
 );
 
+function buildDiffTreeData(items: DiffEntry[]): DiffTreeData {
+    const treeData: TreeDataNode[] = [];
+    const folderChildrenMap = new Map<string, TreeDataNode[]>();
+    const folderKeys: string[] = [];
+    folderChildrenMap.set('', treeData);
+
+    const sortedItems = [...items].sort((a, b) => a.file.localeCompare(b.file));
+
+    for (const item of sortedItems) {
+        const parts = item.file.split('/');
+        let parentPath = '';
+        let parentChildren = treeData;
+
+        for (let i = 0; i < parts.length - 1; i++) {
+            const folderName = parts[i];
+            const folderPath = parentPath ? `${parentPath}/${folderName}` : folderName;
+            const existingChildren = folderChildrenMap.get(folderPath);
+
+            if (existingChildren) {
+                parentChildren = existingChildren;
+                parentPath = folderPath;
+                continue;
+            }
+
+            const node: TreeDataNode = {
+                key: `dir:${folderPath}`,
+                title: folderName,
+                selectable: false,
+                children: [],
+            };
+
+            parentChildren.push(node);
+            const children = node.children as TreeDataNode[];
+            folderChildrenMap.set(folderPath, children);
+            folderKeys.push(`dir:${folderPath}`);
+
+            parentChildren = children;
+            parentPath = folderPath;
+        }
+
+        parentChildren.push({
+            key: item.file,
+            title: parts[parts.length - 1].replace('.class', ''),
+            isLeaf: true,
+        });
+    }
+
+    sortTreeNodes(treeData);
+    return { treeData, folderKeys };
+}
+
+function sortTreeNodes(nodes: TreeDataNode[]): void {
+    nodes.sort((a, b) => {
+        if (a.isLeaf !== b.isLeaf) {
+            return a.isLeaf ? 1 : -1;
+        }
+
+        const titleA = typeof a.title === 'string' ? a.title : '';
+        const titleB = typeof b.title === 'string' ? b.title : '';
+        return titleA.localeCompare(titleB);
+    });
+
+    for (const node of nodes) {
+        if (node.children) {
+            sortTreeNodes(node.children as TreeDataNode[]);
+        }
+    }
+}
+
 const DiffFileList = () => {
     const dataSource = useObservable(entries) || [];
+    const searchValue = useObservable(searchQuery) || "";
     const currentFile = useObservable(selectedFile);
     const loading = useObservable(isDecompiling);
     const hideUnchanged = useObservable(hideUnchangedSizes) || false;
     const summary = useObservable<DiffSummary>(useMemo(() => getDiffSummary(), []));
     const isUnifiedDiff = useObservable(unifiedDiff.observable);
     const isBytecode = useObservable(bytecode.observable);
+    const [folderView, setFolderView] = useState(false);
+    const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
     const { token } = theme.useToken();
+
+    const { treeData, folderKeys } = useMemo(() => buildDiffTreeData(dataSource), [dataSource]);
+    const changeInfoByFile = useMemo(() => {
+        const info = new Map<string, ChangeInfo>();
+        for (const item of dataSource) {
+            info.set(item.file, item.statusInfo);
+        }
+        return info;
+    }, [dataSource]);
 
     const columns = useMemo(() => [
         {
@@ -104,6 +191,21 @@ const DiffFileList = () => {
             hideUnchangedSizes.next(true);
         }
     }, [dataSource.length, hideUnchanged]);
+
+    useEffect(() => {
+        if (!folderView) {
+            return;
+        }
+
+        if (searchValue.trim().length > 0) {
+            setExpandedKeys(folderKeys);
+            return;
+        }
+
+        if (expandedKeys.length === 0) {
+            setExpandedKeys(treeData.map(node => node.key));
+        }
+    }, [folderView, searchValue, folderKeys, treeData, expandedKeys.length]);
 
     return (
         <Layout style={{ height: '100%', backgroundColor: token.colorBgContainer }}>
@@ -173,6 +275,13 @@ const DiffFileList = () => {
                                 onClick={() => hideUnchangedSizes.next(!hideUnchanged)}
                             />
                         </Tooltip>
+                        <Tooltip title={folderView ? "Show flat file list" : "Show folder view"}>
+                            <Button
+                                type="text"
+                                icon={folderView ? <UnorderedListOutlined /> : <FolderOpenOutlined />}
+                                onClick={() => setFolderView(!folderView)}
+                            />
+                        </Tooltip>
                         <Button
                             type="default"
                             variant={"outlined"}
@@ -191,29 +300,79 @@ const DiffFileList = () => {
                     overflowY: 'auto',
                 }}
             >
-                <Table
-                    dataSource={dataSource}
-                    columns={columns}
-                    pagination={false}
-                    size="small"
-                    bordered
-                    showHeader={false}
-                    locale={{ emptyText: <span style={{ color: token.colorTextDescription }}>None</span> }}
-                    rowClassName={(record) =>
-                        currentFile === record.file ? 'ant-table-row-selected' : ''
-                    }
-                    onRow={(record) => ({
-                        onClick: () => {
-                            if (loading) return;
-                            if (currentFile === record.file) return;
+                {folderView ? (
+                    treeData.length === 0 ? (
+                        <span style={{ color: token.colorTextDescription }}>None</span>
+                    ) : (
+                        <Tree
+                            showLine
+                            blockNode
+                            treeData={treeData}
+                            selectedKeys={currentFile ? [currentFile] : []}
+                            expandedKeys={expandedKeys}
+                            onExpand={setExpandedKeys}
+                            onSelect={(_, info) => {
+                                if (loading || !info.node.isLeaf) return;
+                                const file = String(info.node.key);
+                                if (currentFile === file) return;
+                                openTab(file);
+                            }}
+                            titleRender={(nodeData) => {
+                                if (!nodeData.isLeaf) {
+                                    return <span>{String(nodeData.title)}</span>;
+                                }
 
-                            openTab(record.file);
+                                const file = String(nodeData.key);
+                                const info = changeInfoByFile.get(file);
+                                if (!info) {
+                                    return <span>{String(nodeData.title)}</span>;
+                                }
+
+                                return (
+                                    <Flex gap={6} align="center">
+                                        <span>{String(nodeData.title)}</span>
+                                        <Tag color={statusColors[info.state] || 'default'} style={{ marginRight: 0 }}>
+                                            {info.state.toUpperCase()}
+                                        </Tag>
+                                        {info.deletions !== undefined && info.deletions > 0 && (
+                                            <span style={{ color: token.colorError, fontSize: '12px', fontWeight: 'bold' }}>-{info.deletions}</span>
+                                        )}
+                                        {info.additions !== undefined && info.additions > 0 && (
+                                            <span style={{ color: token.colorSuccess, fontSize: '12px', fontWeight: 'bold' }}>+{info.additions}</span>
+                                        )}
+                                    </Flex>
+                                );
+                            }}
+                            style={{
+                                cursor: loading ? 'not-allowed' : 'pointer'
+                            }}
+                        />
+                    )
+                ) : (
+                    <Table
+                        dataSource={dataSource}
+                        columns={columns}
+                        pagination={false}
+                        size="small"
+                        bordered
+                        showHeader={false}
+                        locale={{ emptyText: <span style={{ color: token.colorTextDescription }}>None</span> }}
+                        rowClassName={(record) =>
+                            currentFile === record.file ? 'ant-table-row-selected' : ''
                         }
-                    })}
-                    style={{
-                        cursor: loading ? 'not-allowed' : 'pointer'
-                    }}
-                />
+                        onRow={(record) => ({
+                            onClick: () => {
+                                if (loading) return;
+                                if (currentFile === record.file) return;
+
+                                openTab(record.file);
+                            }
+                        })}
+                        style={{
+                            cursor: loading ? 'not-allowed' : 'pointer'
+                        }}
+                    />
+                )}
             </Layout.Content>
         </Layout>
     );
