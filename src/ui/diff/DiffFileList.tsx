@@ -55,6 +55,8 @@ const entries = combineLatest([getDiffChanges(), searchQuery]).pipe(
     })
 );
 
+const emptyDiffEntries: DiffEntry[] = [];
+
 function buildDiffTreeData(items: DiffEntry[]): DiffTreeData {
     const treeData: TreeDataNode[] = [];
     const folderChildrenMap = new Map<string, TreeDataNode[]>();
@@ -125,7 +127,7 @@ function sortTreeNodes(nodes: TreeDataNode[]): void {
 }
 
 const DiffFileList = () => {
-    const dataSource = useObservable(entries) || [];
+    const dataSource = useObservable(entries) || emptyDiffEntries;
     const searchValue = useObservable(searchQuery) || "";
     const currentFile = useObservable(selectedFile);
     const loading = useObservable(isDecompiling);

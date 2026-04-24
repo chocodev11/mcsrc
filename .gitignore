@@ -12,6 +12,7 @@ test-results
 node_modules
 dist
 dist-ssr
+.mcsrc-cache
 *.local
 
 # Editor directories and files
