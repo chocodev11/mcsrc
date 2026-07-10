@@ -1,5 +1,7 @@
 body {
   background-color: #121212;
+  color: #cccccc;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "SF Pro Text", system-ui, sans-serif;
 }
 
 /* Prevent scrolling the body */
@@ -106,7 +108,465 @@ html, body, #root {
     white-space: nowrap;
 }
 
+.symbol-file-tree-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  vertical-align: middle;
+  flex: 0 0 18px;
+}
+
 /* Don't have text overflow in the structure dialog */
 .structure-tree {
   overflow: auto;
+}
+
+.sidebar-panel {
+  background: linear-gradient(180deg, #181818 0%, #151515 100%);
+  border-right: 1px solid #2a2d2e;
+}
+
+.sidebar-search {
+  padding: 6px 8px 4px;
+}
+
+.sidebar-search .ant-input-affix-wrapper,
+.sidebar-search .ant-input-search-button {
+  background: #1f1f1f;
+  border-color: #3c3c3c;
+}
+
+.sidebar-search .ant-input {
+  background: transparent;
+  color: #cccccc;
+}
+
+.sidebar-search .ant-input::placeholder {
+  color: #858585;
+}
+
+.reference-shell {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #2b2b2b;
+  border-bottom: 1px solid #2b2b2b;
+  background: #181818;
+}
+
+.reference-toolbar {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  height: 32px;
+  border-bottom: 1px solid #2b2b2b;
+}
+
+.reference-back-button.ant-btn {
+  width: 28px;
+  height: 28px;
+  color: #cccccc;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.reference-back-button.ant-btn:hover {
+  background: #2a2d2e;
+  color: #ffffff;
+}
+
+.reference-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #cccccc;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.reference-title .codicon {
+  color: #858585;
+  font-size: 14px;
+}
+
+.reference-header {
+  padding: 6px 12px 8px 12px;
+  gap: 2px;
+}
+
+.reference-query-title {
+  color: #cccccc;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+  word-break: break-word;
+}
+
+.reference-status-line {
+  min-height: 17px;
+  color: #858585;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reference-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.reference-group {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.reference-group-title {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  cursor: pointer;
+  padding: 10px 12px;
+  color: #c9d1d9;
+  font-size: 13px;
+  font-weight: 600;
+  background: #0d1117;
+  border-bottom: 1px solid #30363d;
+}
+
+.reference-group-title:hover {
+  background: #161b22;
+}
+
+.reference-group-title-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.reference-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #58a6ff;
+}
+
+.reference-group-count {
+  margin-left: auto;
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.reference-group-subtitle {
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.reference-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.reference-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  cursor: pointer;
+  min-height: 44px;
+  background: #161b22;
+}
+
+.reference-item:hover {
+  background: #1f2937;
+}
+
+.reference-item + .reference-item {
+  border-top: 1px solid #21262d;
+}
+
+.reference-item-gutter {
+  width: 56px;
+  flex: 0 0 56px;
+  padding: 12px 12px 10px;
+  color: #8b949e;
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: right;
+  background: #0d1117;
+  border-right: 1px solid #30363d;
+}
+
+.reference-item-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  flex: 1 1 auto;
+}
+
+.reference-item-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #c9d1d9;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.reference-item-kind {
+  color: #8b949e;
+  min-width: 44px;
+  text-transform: capitalize;
+}
+
+.reference-item-location {
+  color: #c9d1d9;
+}
+
+.reference-item-snippet {
+  color: #c9d1d9;
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-context-menu.ant-dropdown {
+  min-width: 320px;
+}
+
+.sidebar-context-menu .ant-dropdown-menu {
+  padding: 4px;
+  background: #1f1f1f;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
+}
+
+.sidebar-context-menu .ant-dropdown-menu-item {
+  min-height: 28px;
+  margin: 0;
+  padding: 5px 8px;
+  border-radius: 3px;
+}
+
+.sidebar-context-menu .ant-dropdown-menu-item:hover,
+.sidebar-context-menu .ant-dropdown-menu-item-active {
+  background: #2a2d2e;
+}
+
+.sidebar-context-menu .ant-dropdown-menu-item-disabled {
+  opacity: 0.45;
+}
+
+.sidebar-context-menu .ant-dropdown-menu-title-content {
+  color: #cccccc;
+}
+
+.sidebar-context-menu-label {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  min-width: 300px;
+}
+
+.sidebar-context-menu-title {
+  color: #cccccc;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.sidebar-context-menu-meta {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.sidebar-context-menu-value {
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.reference-state {
+  display: flex;
+  justify-content: center;
+  padding: 24px 10px;
+}
+
+.sidebar-content {
+  flex-grow: 1;
+  overflow-y: auto;
+  padding-right: 10px;
+}
+
+.ant-tree-list-holder {
+  padding-right: 10px;
+  box-sizing: border-box;
+}
+
+.sidebar-content,
+.ant-tree-list-holder,
+.rc-virtual-list-holder,
+.ant-list,
+.ant-list-items,
+.structure-tree,
+.ant-layout,
+.ant-modal-body {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+  scrollbar-width: thin;
+}
+
+.sidebar-content::-webkit-scrollbar,
+.ant-tree-list-holder::-webkit-scrollbar,
+.rc-virtual-list-holder::-webkit-scrollbar,
+.ant-list::-webkit-scrollbar,
+.ant-list-items::-webkit-scrollbar,
+.structure-tree::-webkit-scrollbar,
+.ant-layout::-webkit-scrollbar,
+.ant-modal-body::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.sidebar-content::-webkit-scrollbar-track,
+.ant-tree-list-holder::-webkit-scrollbar-track,
+.rc-virtual-list-holder::-webkit-scrollbar-track,
+.ant-list::-webkit-scrollbar-track,
+.ant-list-items::-webkit-scrollbar-track,
+.structure-tree::-webkit-scrollbar-track,
+.ant-layout::-webkit-scrollbar-track,
+.ant-modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb,
+.ant-tree-list-holder::-webkit-scrollbar-thumb,
+.rc-virtual-list-holder::-webkit-scrollbar-thumb,
+.ant-list::-webkit-scrollbar-thumb,
+.ant-list-items::-webkit-scrollbar-thumb,
+.structure-tree::-webkit-scrollbar-thumb,
+.ant-layout::-webkit-scrollbar-thumb,
+.ant-modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  border: 3px solid transparent;
+  border-radius: 4px;
+  background-clip: padding-box;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb:hover,
+.ant-tree-list-holder::-webkit-scrollbar-thumb:hover,
+.rc-virtual-list-holder::-webkit-scrollbar-thumb:hover,
+.ant-list::-webkit-scrollbar-thumb:hover,
+.ant-list-items::-webkit-scrollbar-thumb:hover,
+.structure-tree::-webkit-scrollbar-thumb:hover,
+.ant-layout::-webkit-scrollbar-thumb:hover,
+.ant-modal-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.38);
+  background-clip: padding-box;
+}
+
+.sidebar-content::-webkit-scrollbar-corner,
+.ant-tree-list-holder::-webkit-scrollbar-corner,
+.rc-virtual-list-holder::-webkit-scrollbar-corner,
+.ant-list::-webkit-scrollbar-corner,
+.ant-list-items::-webkit-scrollbar-corner,
+.structure-tree::-webkit-scrollbar-corner,
+.ant-layout::-webkit-scrollbar-corner,
+.ant-modal-body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.monaco-scrollable-element > .scrollbar {
+  background: transparent !important;
+}
+
+.monaco-scrollable-element > .scrollbar.vertical,
+.monaco-scrollable-element > .scrollbar.horizontal {
+  background: transparent !important;
+}
+
+.monaco-scrollable-element > .scrollbar > .slider {
+  background: rgba(255, 255, 255, 0.22) !important;
+  border: 2px solid transparent !important;
+  border-radius: 4px !important;
+  background-clip: padding-box !important;
+}
+
+.monaco-scrollable-element > .scrollbar > .slider:hover,
+.monaco-scrollable-element > .scrollbar > .slider.active {
+  background: rgba(255, 255, 255, 0.34) !important;
+  background-clip: padding-box !important;
+}
+
+.monaco-editor .decorationsOverviewRuler,
+.monaco-editor .minimap-shadow-visible {
+  box-shadow: none !important;
+}
+
+.monaco-editor .minimap-slider,
+.monaco-editor .minimap-slider .minimap-slider-horizontal {
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
+.monaco-editor .minimap-slider:hover,
+.monaco-editor .minimap-slider.active,
+.monaco-editor .minimap-slider:hover .minimap-slider-horizontal,
+.monaco-editor .minimap-slider.active .minimap-slider-horizontal {
+  background: rgba(255, 255, 255, 0.2) !important;
+}
+
+.monaco-menu-container,
+.monaco-menu {
+  background: #1f1f1f !important;
+  border: 1px solid #454545 !important;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.42) !important;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-item {
+  height: 24px !important;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-label {
+  color: #cccccc !important;
+  font-size: 13px !important;
+  line-height: 24px !important;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-item.focused,
+.monaco-menu .monaco-action-bar.vertical .action-item:hover {
+  background: #2a2d2e !important;
+}
+
+.monaco-menu .monaco-action-bar.vertical .action-item.disabled .action-label {
+  color: #6f6f6f !important;
+}
+
+.monaco-menu .monaco-action-bar.vertical .keybinding {
+  color: #8c8c8c !important;
 }

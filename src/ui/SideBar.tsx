@@ -1,4 +1,4 @@
-import { Button, Divider, Flex, Input } from "antd";
+import { Button, Divider, Flex, Input, Spin } from "antd";
 import Header from "./Header";
 import FileList from "./FileList";
 import type { InputRef, SearchProps } from "antd/es/input";
@@ -6,23 +6,24 @@ import { useObservable } from "../utils/UseObservable";
 import { isSearching } from "../logic/JarFile";
 import SearchResults from "./SearchResults";
 import ReferenceResults from "./ReferenceResults";
-import { formatReferenceQuery, isViewingReferences } from "../logic/FindAllReferences";
+import { formatReferenceQuery, isViewingReferences, referenceSearchState } from "../logic/FindAllReferences";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { focusSearchEvent } from "../logic/Keybinds";
 import { useEffect, useRef } from "react";
-import { searchQuery, referencesQuery } from "../logic/State";
+import { closeReferences, referencesQuery, searchQuery } from "../logic/State";
 
 const { Search } = Input;
 
 const SideBar = () => {
     const showReference = useObservable(isViewingReferences);
     const currentReferenceQuery = useObservable(referencesQuery);
+    const referenceState = useObservable(referenceSearchState);
     const focusSearch = useObservable(focusSearchEvent);
     const searchRef = useRef<InputRef>(null);
 
     useEffect(() => {
         if (focusSearch) {
-            referencesQuery.next("");
+            closeReferences();
             searchRef?.current?.focus();
         }
     }, [focusSearch]);
@@ -38,26 +39,45 @@ const SideBar = () => {
     };
 
     const onBackClick = () => {
-        referencesQuery.next("");
+        closeReferences();
     };
 
     return (
-        <Flex vertical style={{ height: "100%", padding: "0 4px" }}>
+        <Flex vertical className="sidebar-panel" style={{ height: "100%" }}>
             <Header />
             {showReference ? (
-                <>
-                    <Button onClick={onBackClick} icon={<ArrowLeftOutlined />} block>
-                        Back
-                    </Button>
-                    <div style={{ fontSize: "12px", textAlign: "center" }}>
-                        References of: {formatReferenceQuery(currentReferenceQuery || "")}
+                <div className="reference-shell">
+                    <div className="reference-toolbar">
+                        <Button
+                            className="reference-back-button"
+                            onClick={onBackClick}
+                            icon={<ArrowLeftOutlined />}
+                            size="small"
+                            type="text"
+                        />
+                        <div className="reference-title">
+                            <span className="codicon codicon-references" />
+                            <span>References</span>
+                        </div>
                     </div>
-                </>
+                    <Flex vertical className="reference-header">
+                        <div className="reference-query-title">
+                            {formatReferenceQuery(currentReferenceQuery || "")}
+                        </div>
+                        <div className="reference-status-line">
+                            {referenceState?.status === "loading" && <><Spin size="small" /> Searching...</>}
+                            {referenceState?.status === "success" && `${referenceState.results.length} reference${referenceState.results.length === 1 ? "" : "s"}`}
+                            {referenceState?.status === "error" && "Search failed"}
+                        </div>
+                    </Flex>
+                </div>
             ) : (
-                <Search ref={searchRef} placeholder="Search classes" allowClear onChange={onChange}></Search>
+                <div className="sidebar-search">
+                    <Search ref={searchRef} placeholder="Search classes" allowClear onChange={onChange}></Search>
+                </div>
             )}
             <Divider size="small" />
-            <div style={{ flexGrow: 1, overflowY: "auto" }}>
+            <div className="sidebar-content">
                 <FileListOrSearchResults />
             </div>
         </Flex>

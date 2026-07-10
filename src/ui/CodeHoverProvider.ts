@@ -2,6 +2,8 @@ import { editor, type IMarkdownString, type IPosition, Range } from "monaco-edit
 import { type Token } from '../logic/Tokens';
 import { findTokenAtPosition } from './CodeUtils';
 import type { DecompileResult } from "../workers/decompile/types";
+import { getReferenceQueryForToken } from "../logic/FindAllReferences";
+import { formatMethodSignature } from "../utils/JavaDescriptors";
 
 interface IntegerLiteral {
     value: number;
@@ -74,65 +76,7 @@ function formatColorPreview(rgba: { r: number; g: number; b: number; a: number; 
     return `<span style="color:${hexColor};">rgba(${r}, ${g}, ${b}, ${alpha})</span>`;
 }
 
-export function parseDescriptor(descriptor: string): string {
-    // Parse method descriptor like "(Ljava/lang/String;I)V" or field descriptor like "Ljava/lang/String;"
-    const typeMap: Record<string, string> = {
-        'V': 'void',
-        'Z': 'boolean',
-        'B': 'byte',
-        'C': 'char',
-        'S': 'short',
-        'I': 'int',
-        'J': 'long',
-        'F': 'float',
-        'D': 'double'
-    };
-
-    function parseType(desc: string, index: number): [string, number] {
-        let arrayDepth = 0;
-        while (desc[index] === '[') {
-            arrayDepth++;
-            index++;
-        }
-
-        let type: string;
-        let endIndex: number;
-
-        if (desc[index] === 'L') {
-            endIndex = desc.indexOf(';', index);
-            type = desc.substring(index + 1, endIndex).replace(/\//g, '.');
-            endIndex++;
-        } else {
-            type = typeMap[desc[index]] || desc[index];
-            endIndex = index + 1;
-        }
-
-        type += '[]'.repeat(arrayDepth);
-        return [type, endIndex];
-    }
-
-    // Check if it's a method descriptor (starts with '(')
-    if (descriptor.startsWith('(')) {
-        const endParams = descriptor.indexOf(')');
-        const paramsStr = descriptor.substring(1, endParams);
-        const returnTypeStr = descriptor.substring(endParams + 1);
-
-        const params: string[] = [];
-        let i = 0;
-        while (i < paramsStr.length) {
-            const [type, nextIndex] = parseType(paramsStr, i);
-            params.push(type);
-            i = nextIndex;
-        }
-
-        const [returnType] = parseType(returnTypeStr, 0);
-        return `(${params.join(', ')}) → ${returnType}`;
-    } else {
-        // Field descriptor
-        const [type] = parseType(descriptor, 0);
-        return type;
-    }
-}
+export const parseDescriptor = formatMethodSignature;
 
 export function createHoverProvider(
     editorRef: { current: editor.ICodeEditor | null },
@@ -141,7 +85,7 @@ export function createHoverProvider(
 ) {
     return {
         provideHover(model: editor.ITextModel, position: IPosition) {
-            const token = findTokenAtPosition(editorRef.current!, decompileResultRef.current, classListRef.current, false);
+            const token = findTokenAtPosition(editorRef.current!, decompileResultRef.current, classListRef.current, false, position);
 
             // Check for tokens first (classes, methods, fields, etc.)
             if (token) {
@@ -150,7 +94,7 @@ export function createHoverProvider(
                 const range = new Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column);
 
                 const contents: IMarkdownString[] = [];
-
+                const referenceQuery = getReferenceQueryForToken(token);
                 // Format class name for display
                 const formattedClassName = token.className.replace(/\//g, '.');
 
@@ -178,6 +122,12 @@ export function createHoverProvider(
                     case 'parameter':
                     case 'local':
                         return null;
+                }
+
+                if (referenceQuery) {
+                    contents.push({
+                        value: `Right-click this symbol and choose **Find All References**.`
+                    });
                 }
 
                 return {

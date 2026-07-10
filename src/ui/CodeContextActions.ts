@@ -1,6 +1,8 @@
 import type { editor } from "monaco-editor";
 import { findTokenAtPosition } from './CodeUtils';
 import type { DecompileResult } from "../workers/decompile/types";
+import { getReferenceQueryForToken } from "../logic/FindAllReferences";
+import type { ReferenceKey } from "../workers/JarIndex";
 
 export const IS_DEFINITION_CONTEXT_KEY_NAME = "is_definition";
 
@@ -132,26 +134,25 @@ export function createFindAllReferencesAction(
         contextMenuOrder: 1,
         precondition: IS_DEFINITION_CONTEXT_KEY_NAME,
         run: async function (editor: editor.ICodeEditor, ...args: any[]): Promise<void> {
+            const explicitQuery = args[0] as ReferenceKey | undefined;
+            if (typeof explicitQuery === "string" && explicitQuery.length > 0) {
+                referenceQueryNext(explicitQuery);
+                return;
+            }
+
             const token = findTokenAtPosition(editor, decompileResultRef.current, classListRef.current);
             if (!token) {
                 messageApi.error("Failed to find token for references.");
                 return;
             }
 
-            switch (token.type) {
-                case "class":
-                    referenceQueryNext(token.className);
-                    break;
-                case "field":
-                    referenceQueryNext(`${token.className}:${token.name}:${token.descriptor}`);
-                    break;
-                case "method":
-                    referenceQueryNext(`${token.className}:${token.name}:${token.descriptor}`);
-                    break;
-                default:
-                    messageApi.error("Token is not a class, field, or method.");
-                    return;
+            const query = getReferenceQueryForToken(token);
+            if (!query) {
+                messageApi.error("Token is not a class, field, or method.");
+                return;
             }
+
+            referenceQueryNext(query);
         }
     };
 }

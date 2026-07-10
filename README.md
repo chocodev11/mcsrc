@@ -1,4 +1,4 @@
-# [https://mcsrc.dev/](https://mcsrc.dev/)
+# [https://mcsrc.chocodev.workers.dev/](https://mcsrc.chocodev.workers.dev/)
 
 Note: This project is not affiliated with Mojang or Microsoft in any way. It does NOT redistribute any Minecraft code or compiled bytecode. The server jar is downloaded directly from Mojang's servers to your browser.
 

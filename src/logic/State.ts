@@ -15,6 +15,16 @@ export const openTabs = new BehaviorSubject<Tab[]>(initialState.file ? [new Tab(
 export const tabHistory = new BehaviorSubject<string[]>(initialState.file ? [initialState.file] : []);
 export const searchQuery = new BehaviorSubject("");
 export const referencesQuery = new BehaviorSubject("");
+export const referencesRequestNonce = new BehaviorSubject(0);
+
+export function openReferences(query: string): void {
+  referencesQuery.next(query);
+  referencesRequestNonce.next(referencesRequestNonce.value + 1);
+}
+
+export function closeReferences(): void {
+  referencesQuery.next("");
+}
 
 export interface SelectedLines {
   line: number;

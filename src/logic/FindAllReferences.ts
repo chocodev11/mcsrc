@@ -1,40 +1,89 @@
-import { BehaviorSubject, combineLatest, distinctUntilChanged, from, map, Observable, switchMap, throttleTime } from "rxjs";
+import { BehaviorSubject, catchError, combineLatest, from, map, Observable, of, startWith, switchMap } from "rxjs";
 import { jarIndex, type ReferenceKey, type ReferenceString } from "../workers/JarIndex";
 import { openTab } from "./Tabs";
-import { referencesQuery } from "./State";
+import { referencesQuery, referencesRequestNonce } from "./State";
 import type { Token } from "./Tokens";
 import type { DecompileResult } from "../workers/decompile/types";
+import { formatJavaClassName, formatJavaMethodName, formatMethodSignature } from "../utils/JavaDescriptors";
 
-export const referenceResults = referencesQuery
-    .pipe(
-        throttleTime(200),
-        distinctUntilChanged(),
-        switchMap((query) => {
-            if (!query) {
-                return from([[]]);
-            }
-            return jarIndex.pipe(
-                switchMap((index) => from(index.getReference(query)))
-            );
-        })
-    );
+export interface ReferenceSearchState {
+    status: "idle" | "loading" | "success" | "error";
+    query: string;
+    results: ReferenceString[];
+    error?: string;
+}
+
+export const referenceSearchState = combineLatest([referencesQuery, referencesRequestNonce]).pipe(
+    switchMap(([query]) => {
+        if (!query) {
+            return of<ReferenceSearchState>({
+                status: "idle",
+                query: "",
+                results: []
+            });
+        }
+
+        return jarIndex.pipe(
+            switchMap((index) => from(index.getReference(query)).pipe(
+                map((results) => ({
+                    status: "success" as const,
+                    query,
+                    results
+                })),
+                startWith({
+                    status: "loading" as const,
+                    query,
+                    results: []
+                }),
+                catchError((error: unknown) => of({
+                    status: "error" as const,
+                    query,
+                    results: [],
+                    error: error instanceof Error ? error.message : String(error)
+                }))
+            ))
+        );
+    })
+);
+
+export const referenceResults = referenceSearchState.pipe(
+    map((state) => state.results)
+);
 
 export const isViewingReferences = referencesQuery.pipe(
     map((query) => query.length > 0)
 );
 
+export function getReferenceQueryForToken(token: Token): ReferenceKey | null {
+    switch (token.type) {
+        case "class":
+            return token.className;
+        case "field":
+            return `${token.className}:${token.name}:${token.descriptor}`;
+        case "method":
+            return `${token.className}:${token.name}:${token.descriptor}`;
+        default:
+            return null;
+    }
+}
+
 // Format the reference string to be displayed by the user
 export function formatReference(reference: ReferenceString): string {
     if (reference.startsWith("m:")) {
         const parts = reference.slice(2).split(":");
-        return `${parts[1]}${parts[2]}`;
+        const ownerClassName = parts[0];
+        const methodName = formatJavaMethodName(parts[1], ownerClassName);
+        if (parts[1] === "<clinit>") {
+            return methodName;
+        }
+        return `${methodName}${formatMethodSignature(parts[2], { simpleNames: true, includeReturnType: false })}`;
     }
     if (reference.startsWith("f:")) {
         const parts = reference.slice(2).split(":");
-        return parts[1];
+        return parts[1].replace(/\$/g, ".");
     }
     if (reference.startsWith("c:")) {
-        return reference.slice(2);
+        return formatJavaClassName(reference.slice(2), true);
     }
     return reference;
 }
@@ -44,16 +93,20 @@ export function formatReferenceQuery(query: ReferenceKey): string {
 
     switch (type) {
         case "class":
-            return query.split("/").pop() || query;
+            return formatJavaClassName(query, true);
         case "method": {
             const parts = query.split(":");
-            const className = parts[0].split("/").pop() || parts[0];
-            return `${className}.${parts[1]}${parts[2]}`;
+            const className = formatJavaClassName(parts[0], true);
+            const methodName = formatJavaMethodName(parts[1], parts[0]);
+            if (parts[1] === "<clinit>") {
+                return `${className}.${methodName}`;
+            }
+            return `${className}.${methodName}${formatMethodSignature(parts[2], { simpleNames: true, includeReturnType: false })}`;
         }
         case "field": {
             const parts = query.split(":");
-            const className = parts[0].split("/").pop() || parts[0];
-            return `${className}.${parts[1]}`;
+            const className = formatJavaClassName(parts[0], true);
+            return `${className}.${parts[1].replace(/\$/g, ".")}`;
         }
     }
 }
@@ -93,22 +146,7 @@ export function goToReference(query: ReferenceKey, reference: ReferenceString) {
     nextReferenceNavigation.next({ className, query, reference });
 }
 
-export function getNextJumpToken(decompileResult: DecompileResult): Token | undefined {
-    const referenceNavigation = nextReferenceNavigation.getValue();
-
-    if (!referenceNavigation) {
-        return undefined;
-    }
-
-    const { className, query, reference } = referenceNavigation;
-
-    if (decompileResult.className != className) {
-        console.log("Decompile result class does not match reference navigation class", decompileResult.className, className);
-        return undefined;
-    }
-
-    nextReferenceNavigation.next(undefined);
-
+export function findReferenceToken(query: ReferenceKey, reference: ReferenceString, decompileResult: DecompileResult): Token | undefined {
     // This works by first finding the token that matches the reference we are looking for.
     // We can then find the token that matches the declaration of the query we are looking for.
     // This allows us to jump to the first reference of the query after the reference that was selected.
@@ -140,12 +178,6 @@ export function getNextJumpToken(decompileResult: DecompileResult): Token | unde
                     return token;
                 }
 
-                if (!query.includes(":")) {
-                    // If the query is just a class, we can't find a method declaration for it
-                    // Is this even possible?
-                    return undefined;
-                }
-
                 // For methods we can keep looking for a token that matches the query after this
                 referenceTokenIndex = i;
                 break;
@@ -172,6 +204,10 @@ export function getNextJumpToken(decompileResult: DecompileResult): Token | unde
             return token;
         }
 
+        if (queryType == "class" && token.type == "class" && token.className == query) {
+            return token;
+        }
+
         if (queryType == "method" && token.type == "method" && token.name == name && token.descriptor == descriptor) {
             return token;
         }
@@ -185,4 +221,22 @@ export function getNextJumpToken(decompileResult: DecompileResult): Token | unde
     // Just return the declaration that supposedly contains the reference
     console.log("Could not find token for", query);
     return decompileResult.tokens[referenceTokenIndex];
+}
+
+export function getNextJumpToken(decompileResult: DecompileResult): Token | undefined {
+    const referenceNavigation = nextReferenceNavigation.getValue();
+
+    if (!referenceNavigation) {
+        return undefined;
+    }
+
+    const { className, query, reference } = referenceNavigation;
+
+    if (decompileResult.className != className) {
+        console.log("Decompile result class does not match reference navigation class", decompileResult.className, className);
+        return undefined;
+    }
+
+    nextReferenceNavigation.next(undefined);
+    return findReferenceToken(query, reference, decompileResult);
 }

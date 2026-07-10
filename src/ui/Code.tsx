@@ -34,7 +34,7 @@ import {
     pendingTokenJump
 } from './CodeExtensions';
 import { bytecode } from '../logic/Settings';
-import { selectedFile, diffView, openTabs, selectedLines, tabHistory, referencesQuery, mobileDrawerOpen } from '../logic/State';
+import { selectedFile, diffView, openTabs, selectedLines, tabHistory, mobileDrawerOpen, openReferences } from '../logic/State';
 
 const IS_ANDROID_CHROME = /Android/.test(navigator.userAgent) && /Chrome/.test(navigator.userAgent);
 
@@ -127,7 +127,7 @@ const Code = () => {
         const viewAllReferences = monaco.editor.addEditorAction(
             createFindAllReferencesAction(decompileResultRef, classListRef, messageApi, (value) => {
                 mobileDrawerOpen.next(true);
-                referencesQuery.next(value);
+                openReferences(value);
             })
         );
 
@@ -384,6 +384,11 @@ const Code = () => {
                     domReadOnly: true,
                     tabSize: 3,
                     minimap: { enabled: !hideMinimap },
+                    scrollbar: {
+                        useShadows: false,
+                        verticalScrollbarSize: 10,
+                        horizontalScrollbarSize: 10,
+                    },
                     glyphMargin: true,
                     foldingImportsByDefault: true,
                     foldingHighlight: false,

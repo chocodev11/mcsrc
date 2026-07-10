@@ -2,7 +2,7 @@
 import { Tree, Dropdown, message } from 'antd';
 import type { TreeDataNode, TreeProps, MenuProps } from 'antd';
 import { CaretDownFilled } from '@ant-design/icons';
-import { combineLatest, from, map, Observable, shareReplay, switchMap, startWith } from 'rxjs';
+import { combineLatest, map, Observable, shareReplay } from 'rxjs';
 import { classesList } from '../logic/JarFile';
 import { useObservable } from '../utils/UseObservable';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -10,31 +10,23 @@ import type { Key } from 'antd/es/table/interface';
 import { openTab } from '../logic/Tabs';
 import { minecraftJar, type MinecraftJar } from '../logic/MinecraftApi';
 import { decompileClass } from '../logic/Decompiler';
-import { selectedFile, referencesQuery } from '../logic/State';
+import { openReferences, selectedFile } from '../logic/State';
 import { compactPackages } from '../logic/Settings';
-import { jarIndex, type ClassData } from '../workers/JarIndex';
-import { ClassDataIcon, JavaIcon, PackageIcon } from './intellij-icons';
+import { FileIcon, FolderIcon } from '@react-symbols/icons/utils';
 
-const classData: Observable<Map<string, ClassData> | null> = jarIndex.pipe(
-    switchMap(jarIndex => from(jarIndex.getClassData()).pipe(
-        map(classes => {
-            const map = new Map<string, ClassData>();
-            for (const data of classes) {
-                map.set(data.className, data);
-            }
-            return map;
-        }),
-        startWith(null)
-    )),
-    shareReplay(1)
-);
+function renderFolderNamedIcon(folderName: string) {
+    return <FolderIcon folderName={folderName} width={18} height={18} className="symbol-file-tree-icon" />;
+}
+
+function renderJavaFileIcon(fileName: string) {
+    return <FileIcon fileName={fileName} width={18} height={18} className="symbol-file-tree-icon" />;
+}
 
 const fileTree: Observable<TreeDataNode[]> = combineLatest([
     classesList,
-    classData,
     compactPackages.observable
 ]).pipe(
-    map(([classNames, classData, compact]) => {
+    map(([classNames, compact]) => {
         const dirs = new Map<string, TreeDataNode[]>();
         dirs.set('', []);
 
@@ -56,7 +48,7 @@ const fileTree: Observable<TreeDataNode[]> = combineLatest([
                         dirs.get(parent)!.push({
                             title: p,
                             key: current,
-                            icon: <PackageIcon style={{ fontSize: '16px' }} />,
+                            icon: renderFolderNamedIcon(p),
                             children: [],
                             isLeaf: false,
                         });
@@ -64,14 +56,11 @@ const fileTree: Observable<TreeDataNode[]> = combineLatest([
                 });
             };
 
-            const data = classData?.get(className);
             dirs.get(dirPath)!.push({
                 title: className.slice(i + 1),
                 key: classPath,
                 isLeaf: true,
-                icon: data
-                    ? <ClassDataIcon data={data} style={{ fontSize: '16px' }} />
-                    : <JavaIcon style={{ fontSize: '16px' }} />,
+                icon: renderJavaFileIcon(`${className.slice(i + 1)}.java`),
             });
         }
 
@@ -154,17 +143,10 @@ const getMenuItems = (
     const link = jar ? `https://mcsrc.dev/1/${jar.version}/${linkPath}` : '';
 
     const renderLabel = (title: string, value: string) => (
-        <div style={{ display: 'flex', gap: '24px', justifyContent: 'space-between', alignItems: 'center', minWidth: '300px' }}>
-            <span style={{ whiteSpace: 'nowrap' }}>{title}</span>
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginLeft: 'auto' }}>
-                <span style={{
-                    color: 'rgba(255, 255, 255, 0.45)',
-                    fontSize: '12px',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    maxWidth: '250px'
-                }} title={value}>
+        <div className="sidebar-context-menu-label">
+            <span className="sidebar-context-menu-title">{title}</span>
+            <div className="sidebar-context-menu-meta">
+                <span className="sidebar-context-menu-value" title={value}>
                     {value}
                 </span>
             </div>
@@ -218,7 +200,7 @@ const getMenuItems = (
             label: 'Find All References',
             onClick: () => {
                 const cleanPath = path.replace('.class', '');
-                referencesQuery.next(cleanPath);
+                openReferences(cleanPath);
             },
             disabled: !isFile
         },
@@ -301,6 +283,7 @@ const FileList = () => {
                 <div key={contextMenu.key + contextMenu.x + contextMenu.y} style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y, zIndex: 1000 }}>
                     <Dropdown
                         menu={{ items: menuItems }}
+                        classNames={{ root: 'sidebar-context-menu' }}
                         open={true}
                         trigger={['click']}
                     >

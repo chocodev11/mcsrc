@@ -1,18 +1,19 @@
-import { editor } from "monaco-editor";
+import { editor, type IPosition } from "monaco-editor";
 import { type Token } from '../logic/Tokens';
 
 export function findTokenAtPosition(
     editor: editor.ICodeEditor,
     decompileResult: { tokens: Token[]; } | undefined,
     classList: string[] | undefined,
-    useClassList = true
+    useClassList = true,
+    positionOverride?: IPosition
 ): Token | null {
     const model = editor.getModel();
     if (!model || !decompileResult || (useClassList && !classList)) {
         return null;
     }
 
-    const position = editor.getPosition();
+    const position = positionOverride ?? editor.getPosition();
     if (!position) {
         return null;
     }
