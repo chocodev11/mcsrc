@@ -5,7 +5,10 @@ import {
     clampLimit,
     emptyFieldMessage,
     enforceCharBudget,
+    formatToolText,
+    jsonToolResult,
     paginate,
+    SEARCH_MATCH_CAP,
     sliceLines,
     withTimeout,
 } from "./response.ts";
@@ -86,6 +89,16 @@ describe("MCP class search", () => {
     it("returns empty for no hits", () => {
         expect(searchClasses("DefinitelyMissing", classes)).toEqual([]);
     });
+
+    it("respects explicit match cap for total honesty", () => {
+        const many = Array.from({ length: SEARCH_MATCH_CAP + 20 }, (_, i) => `pkg/Class${i}`);
+        const ranked = searchClasses("pkg/", many, SEARCH_MATCH_CAP + 1);
+        expect(ranked.length).toBe(SEARCH_MATCH_CAP + 1);
+        const totalCapped = ranked.length > SEARCH_MATCH_CAP;
+        const candidates = totalCapped ? ranked.slice(0, SEARCH_MATCH_CAP) : ranked;
+        expect(totalCapped).toBe(true);
+        expect(candidates).toHaveLength(SEARCH_MATCH_CAP);
+    });
 });
 
 describe("MCP response helpers", () => {
@@ -135,8 +148,44 @@ describe("MCP response helpers", () => {
 
     it("builds empty-field guidance", () => {
         const message = emptyFieldMessage("diff", "unchanged", ["try bytecode"]);
-        expect(message).toContain("diff is empty");
+        expect(message).toContain("diff empty");
         expect(message).toContain("try bytecode");
+    });
+
+    it("formats code-first tool text without pretty JSON", () => {
+        const text = formatToolText({
+            className: "net/minecraft/Foo",
+            status: "found",
+            content: "class Foo {\n  void bar() {}\n}",
+        });
+        expect(text).toContain("className=net/minecraft/Foo");
+        expect(text).toContain("class Foo {");
+        expect(text).not.toContain("\\n");
+        expect(text).not.toContain("  \"content\"");
+    });
+
+    it("formats list results as compact JSON", () => {
+        const text = formatToolText({
+            classes: ["a", "b"],
+            page: { total_count: 2, count: 2, offset: 0, limit: 30, has_more: false, next_offset: null },
+        });
+        expect(text).toBe(JSON.stringify({
+            classes: ["a", "b"],
+            page: { total_count: 2, count: 2, offset: 0, limit: 30, has_more: false, next_offset: null },
+        }));
+        expect(text).not.toContain("\n  ");
+    });
+
+    it("jsonToolResult uses compact code-first content text", () => {
+        const result = jsonToolResult({
+            className: "X",
+            content: "line1\nline2\nline3",
+            status: "found",
+        });
+        const text = result.content[0].text;
+        expect(text).toContain("line1");
+        expect(text).toContain("status=found");
+        expect(text).not.toContain('"content":');
     });
 });
 

@@ -22,13 +22,11 @@ export interface VersionManifest {
 }
 
 export interface McClassReadResult {
-    version: string;
+    /** Present for navigation; omitted from empty noise when missing. */
     className: string;
     mode: "source" | "bytecode";
     status: "found" | "missing";
-    checksum: number;
     content: string;
-    message?: string;
     truncation?: {
         truncated: boolean;
         total_lines: number;
@@ -37,17 +35,31 @@ export interface McClassReadResult {
         max_lines: number;
         note?: string;
     };
+    message?: string;
+}
+
+export interface MethodCandidate {
+    name: string;
+    descriptor: string;
+    line?: number;
 }
 
 export interface McMethodReadResult {
-    version: string;
     className: string;
     memberName: string;
     descriptor?: string;
     mode: "source" | "bytecode";
-    status: "found" | "missing";
-    checksum: number;
+    status: "found" | "missing" | "ambiguous";
     content: string;
+    candidates?: MethodCandidate[];
+    truncation?: {
+        truncated: boolean;
+        total_lines: number;
+        start_line: number;
+        returned_lines: number;
+        max_lines: number;
+        note?: string;
+    };
     message?: string;
 }
 
@@ -88,38 +100,48 @@ export interface ChangedClassesResult {
 }
 
 export interface DiffClassResult {
-    leftVersion: string;
-    rightVersion: string;
     className: string;
     mode: "source" | "bytecode";
     status: ChangeState;
     diff: string;
     message?: string;
+    truncation?: {
+        truncated: boolean;
+        total_lines: number;
+        start_line: number;
+        returned_lines: number;
+        max_lines: number;
+        note?: string;
+    };
 }
 
 export interface DiffMethodResult {
-    leftVersion: string;
-    rightVersion: string;
     className: string;
     memberName: string;
     descriptor?: string;
     mode: "source" | "bytecode";
     status: ChangeState;
-    leftStatus: "found" | "missing";
-    rightStatus: "found" | "missing";
+    leftStatus: "found" | "missing" | "ambiguous";
+    rightStatus: "found" | "missing" | "ambiguous";
     diff: string;
     message?: string;
+    truncation?: {
+        truncated: boolean;
+        total_lines: number;
+        start_line: number;
+        returned_lines: number;
+        max_lines: number;
+        note?: string;
+    };
 }
 
 export interface BehaviorContextResult {
-    version: string;
     className: string;
-    checksum: number;
     memberName?: string;
     descriptor?: string;
     snippet: string;
     /** Same-class reference sites only — not jar-wide callers. */
-    local_references: string[];
+    local_references?: string[];
     message?: string;
 }
 
@@ -128,14 +150,11 @@ export interface ClassMember {
     name: string;
     descriptor: string;
     line: number;
-    declaration: boolean;
 }
 
 export interface ListMembersResult {
-    version: string;
     className: string;
     status: "found" | "missing";
-    checksum: number;
     members: ClassMember[];
     page: {
         total_count: number;
@@ -152,11 +171,9 @@ export interface PrepareVersionResult {
     version: string;
     status: "ready";
     class_count: number;
-    message: string;
 }
 
 export interface VersionsResult {
-    count: number;
     versions: Array<{ id: string; type: string; releaseTime: string }>;
     page: {
         total_count: number;
@@ -166,12 +183,10 @@ export interface VersionsResult {
         has_more: boolean;
         next_offset: number | null;
     };
-    policy: string;
     message?: string;
 }
 
 export interface SearchClassResult {
-    version: string;
     query: string;
     classes: string[];
     page: {
@@ -182,5 +197,8 @@ export interface SearchClassResult {
         has_more: boolean;
         next_offset: number | null;
     };
+    /** True when more than candidate_cap matches exist; total_count is capped. */
+    total_capped?: boolean;
+    candidate_cap?: number;
     message?: string;
 }

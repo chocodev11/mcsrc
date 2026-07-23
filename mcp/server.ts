@@ -1,10 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { MinecraftReferenceService, VERSION_POLICY } from "./reference.ts";
+import { MinecraftReferenceService, resolveCacheDir, VERSION_POLICY } from "./reference.ts";
 import {
+    DEFAULT_DIFF_MAX_LINES,
     DEFAULT_LIST_LIMIT,
     DEFAULT_MAX_LINES,
+    DEFAULT_METHOD_MAX_LINES,
     DEFAULT_TOOL_TIMEOUT_MS,
     MAX_LIST_LIMIT,
     MAX_MAX_LINES,
@@ -15,8 +17,8 @@ const reference = new MinecraftReferenceService();
 
 const server = new McpServer(
     {
-        name: "mcsrc-reference",
-        version: "0.2.0",
+        name: "mcsrc-mcp-server",
+        version: "0.3.0",
     },
     {
         instructions: [
@@ -24,10 +26,11 @@ const server = new McpServer(
             VERSION_POLICY,
             "Workflow: mc_versions → mc_prepare_version (once per version) → mc_search_class → mc_list_members → mc_read_method (prefer) or mc_read_class (paginated).",
             "For version comparisons: mc_changed_classes (paginated) → mc_diff_method (prefer) or mc_diff_class.",
-            "className is internal slash form (net/minecraft/...), dots are accepted and normalized.",
-            "mc_behavior_context local_references are SAME-CLASS only — not jar-wide callers.",
+            "className is internal slash form (net/minecraft/...). Dots accepted and normalized.",
+            "If status=ambiguous, pass descriptor from candidates (or mc_list_members). Do not guess overloads.",
+            "mc_behavior_context local_references are SAME-CLASS only — not jar-wide callers. Prefer mc_read_method unless you need those refs.",
             "Never substitute another Minecraft version after an error unless the user explicitly asks for a fallback.",
-            "Keep payloads small: use limits, offsets, max_lines, and method-scoped tools.",
+            "Keep payloads small: prefer methods over classes; use limits/offsets/max_lines.",
         ].join(" "),
     }
 );
@@ -51,6 +54,12 @@ const offsetSchema = z.number().int().min(0).default(0)
 
 const maxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_MAX_LINES)
     .describe(`Max lines of text to return (default ${DEFAULT_MAX_LINES}, max ${MAX_MAX_LINES})`);
+
+const methodMaxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_METHOD_MAX_LINES)
+    .describe(`Max lines of method body (default ${DEFAULT_METHOD_MAX_LINES}, max ${MAX_MAX_LINES})`);
+
+const diffMaxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_DIFF_MAX_LINES)
+    .describe(`Max lines of unified diff (default ${DEFAULT_DIFF_MAX_LINES}, max ${MAX_MAX_LINES})`);
 
 const startLineSchema = z.number().int().min(1).default(1)
     .describe("1-based line number to start reading from (for large classes)");
@@ -106,7 +115,8 @@ server.registerTool(
         title: "Search Minecraft classes",
         description:
             "Search class names in one server jar. Supports simple names (ServerLevel), camel-case acronyms, " +
-            "and package/path queries (net/minecraft/server or net.minecraft.server). Returns paginated slash-form names.",
+            "and package/path queries (net/minecraft/server or net.minecraft.server). " +
+            "Returns paginated slash-form names. If total_capped=true, narrow the query — results are incomplete.",
         inputSchema: z.object({
             version: versionSchema,
             query: z.string().min(1).describe("Simple name, acronym, package path, or partial FQN"),
@@ -126,7 +136,7 @@ server.registerTool(
         title: "List class members",
         description:
             "List declared methods/fields for a class (name, descriptor, line) without dumping the full source. " +
-            "Prefer this before mc_read_class. Use results with mc_read_method.",
+            "Prefer this before mc_read_class. Use results with mc_read_method (pass descriptor when overloaded).",
         inputSchema: z.object({
             version: versionSchema,
             className: classNameSchema,
@@ -150,8 +160,8 @@ server.registerTool(
     {
         title: "Read Minecraft class",
         description:
-            "Read decompiled source or bytecode for a whole class. Results are line-truncated by default to protect context. " +
-            "Prefer mc_list_members + mc_read_method for targeted work. Use start_line/max_lines to page through large classes.",
+            "Read decompiled source or bytecode for a whole class (line-capped). " +
+            "Prefer mc_list_members + mc_read_method for targeted work. Use start_line/max_lines to page large classes.",
         inputSchema: z.object({
             version: versionSchema,
             className: classNameSchema,
@@ -174,19 +184,21 @@ server.registerTool(
         title: "Read Minecraft method",
         description:
             "Read one method body (decompiled source or bytecode). Preferred over mc_read_class. " +
-            "Pass descriptor when overloaded; constructors are <init>. Use mc_list_members if the method is not found.",
+            "Pass descriptor when overloaded; constructors are <init>. " +
+            "If status=ambiguous, re-call with descriptor from candidates. Use mc_list_members if missing.",
         inputSchema: z.object({
             version: versionSchema,
             className: classNameSchema,
             memberName: z.string().min(1).describe("Method name, e.g. tick or <init>"),
             descriptor: z.string().optional().describe("JVM descriptor to disambiguate overloads, e.g. (Lnet/minecraft/world/level/Level;)V"),
             mode: modeSchema,
+            max_lines: methodMaxLinesSchema,
         }),
         annotations,
     },
-    async ({ version, className, memberName, descriptor, mode }) => {
+    async ({ version, className, memberName, descriptor, mode, max_lines }) => {
         return runTool("mc_read_method", () =>
-            reference.readMethod(version, className, memberName, descriptor, mode)
+            reference.readMethod(version, className, memberName, descriptor, mode, { maxLines: max_lines })
         );
     }
 );
@@ -221,15 +233,14 @@ server.registerTool(
     {
         title: "Diff Minecraft class",
         description:
-            "Unified diff for one class between two versions. Diff text is line-capped. " +
+            "Unified diff for one class between two versions (line-capped). " +
             "If source is identical but CRC changed, try mode=bytecode. Prefer mc_diff_method for single methods.",
         inputSchema: z.object({
             leftVersion: versionSchema,
             rightVersion: versionSchema,
             className: classNameSchema,
             mode: modeSchema,
-            max_lines: z.number().int().min(1).max(MAX_MAX_LINES).default(400)
-                .describe("Max lines of unified diff to return"),
+            max_lines: diffMaxLinesSchema,
         }),
         annotations,
     },
@@ -245,7 +256,8 @@ server.registerTool(
     {
         title: "Diff Minecraft method",
         description:
-            "Unified diff for a single method between two versions. Preferred over full-class diffs for behavior reviews.",
+            "Unified diff for a single method between two versions (line-capped). " +
+            "Preferred over full-class diffs. Pass descriptor when overloaded; status=ambiguous if not.",
         inputSchema: z.object({
             leftVersion: versionSchema,
             rightVersion: versionSchema,
@@ -253,12 +265,15 @@ server.registerTool(
             memberName: z.string().min(1).describe("Method name"),
             descriptor: z.string().optional().describe("JVM descriptor when overloaded"),
             mode: modeSchema,
+            max_lines: diffMaxLinesSchema,
         }),
         annotations,
     },
-    async ({ leftVersion, rightVersion, className, memberName, descriptor, mode }) => {
+    async ({ leftVersion, rightVersion, className, memberName, descriptor, mode, max_lines }) => {
         return runTool("mc_diff_method", () =>
-            reference.diffMethod(leftVersion, rightVersion, className, memberName, descriptor, mode)
+            reference.diffMethod(leftVersion, rightVersion, className, memberName, descriptor, mode, {
+                maxLines: max_lines,
+            })
         );
     }
 );
@@ -268,9 +283,8 @@ server.registerTool(
     {
         title: "Minecraft behavior context",
         description:
-            "Review-oriented snippet for a class or member. " +
-            "include_local_refs only finds references inside the SAME class — not jar-wide callers. " +
-            "Jar-wide find-usages is not available yet.",
+            "Review-oriented snippet for a class or member. Prefer mc_read_method unless you need same-class refs. " +
+            "include_local_refs only finds references inside the SAME class — not jar-wide callers.",
         inputSchema: z.object({
             version: versionSchema,
             className: classNameSchema,
@@ -289,9 +303,10 @@ server.registerTool(
 );
 
 // Keep a short stderr banner so hosts show the process is alive (never stdout — stdio MCP).
+// Cache lives outside the open repo cwd by default (user cache dir); override with MCSRC_CACHE_DIR.
 console.error(
     `[mcsrc-mcp] ready (timeout default ${DEFAULT_TOOL_TIMEOUT_MS / 1000}s). ` +
-    "Cache dir: " + (process.env.MCSRC_CACHE_DIR ?? ".mcsrc-cache")
+    "Cache dir: " + resolveCacheDir()
 );
 
 const transport = new StdioServerTransport();

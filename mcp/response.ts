@@ -2,9 +2,17 @@
 
 export const DEFAULT_LIST_LIMIT = 30;
 export const MAX_LIST_LIMIT = 100;
-export const DEFAULT_MAX_LINES = 200;
-export const MAX_MAX_LINES = 2000;
-export const MAX_RESPONSE_CHARS = 80_000;
+/** Default line page for full-class reads (keep agent context small). */
+export const DEFAULT_MAX_LINES = 100;
+export const MAX_MAX_LINES = 1000;
+/** Default line cap for single-method bodies. */
+export const DEFAULT_METHOD_MAX_LINES = 120;
+/** Default line cap for unified diffs. */
+export const DEFAULT_DIFF_MAX_LINES = 200;
+/** Hard ceiling on tool result text size. */
+export const MAX_RESPONSE_CHARS = 28_000;
+/** Max ranked search hits before total_count is reported as capped. */
+export const SEARCH_MATCH_CAP = 500;
 /** Default wall-clock budget for jar/download/decompile tools. */
 export const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
 
@@ -75,7 +83,7 @@ export function sliceLines(
 
     if (startIndex >= totalLines) {
         return {
-            content: `// start_line ${startLine} is past end of content (${totalLines} lines).`,
+            content: `// start_line ${startLine} past end (${totalLines} lines)`,
             truncation: {
                 truncated: true,
                 total_lines: totalLines,
@@ -89,15 +97,14 @@ export function sliceLines(
 
     const slice = lines.slice(startIndex, startIndex + maxLines);
     const truncated = startIndex > 0 || startIndex + slice.length < totalLines;
-    const notes: string[] = [];
-    if (truncated) {
-        notes.push(`Showing lines ${startLine}-${startLine + slice.length - 1} of ${totalLines}.`);
-        notes.push("Pass start_line/max_lines for more, or use mc_read_method / mc_list_members for smaller payloads.");
-    }
+    const endLine = startLine + slice.length - 1;
+    const note = truncated
+        ? `lines ${startLine}-${endLine}/${totalLines}; use start_line/max_lines or mc_read_method`
+        : undefined;
 
     let content = slice.join("\n");
     if (truncated) {
-        content = `${content}\n// ... truncated: ${notes.join(" ")}`;
+        content = `${content}\n// ... ${note}`;
     }
 
     return {
@@ -108,7 +115,7 @@ export function sliceLines(
             start_line: startLine,
             returned_lines: slice.length,
             max_lines: maxLines,
-            note: notes.join(" ") || undefined,
+            note,
         },
     };
 }
@@ -119,7 +126,7 @@ export function enforceCharBudget(text: string, budget = MAX_RESPONSE_CHARS): { 
     }
     const kept = text.slice(0, budget);
     return {
-        text: `${kept}\n// ... response truncated at ${budget} characters. Use a smaller scope (method, member list, pagination).`,
+        text: `${kept}\n// ... truncated at ${budget} chars; narrow scope (method/member/pagination)`,
         truncated: true,
     };
 }
@@ -134,8 +141,7 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
         timer = setTimeout(() => {
             reject(new Error(
                 `${label} timed out after ${Math.round(ms / 1000)}s. ` +
-                "First use of a version downloads the server jar (can be slow). " +
-                "Retry once, call mc_prepare_version first, or narrow the request (method vs full class)."
+                "First use downloads the jar. Retry, call mc_prepare_version, or use mc_read_method."
             ));
         }, ms);
     });
@@ -148,16 +154,64 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
 }
 
 export function emptyFieldMessage(field: string, reason: string, nextSteps: string[]): string {
-    return [
-        `${field} is empty: ${reason}`,
-        ...nextSteps.map(step => `- ${step}`),
-    ].join("\n");
+    const steps = nextSteps.length > 0 ? ` → ${nextSteps.join("; ")}` : "";
+    return `${field} empty: ${reason}${steps}`;
+}
+
+const BODY_KEYS = ["content", "diff", "snippet"] as const;
+
+/**
+ * Format tool results for model context:
+ * - Code-bearing results: one-line meta header + raw body (no JSON escaping)
+ * - Everything else: compact JSON (no pretty-print)
+ */
+export function formatToolText(value: unknown): string {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return JSON.stringify(value);
+    }
+
+    const obj = value as Record<string, unknown>;
+    const bodyKey = BODY_KEYS.find(key => {
+        const body = obj[key];
+        return typeof body === "string" && body.length > 0;
+    });
+
+    if (bodyKey) {
+        const body = obj[bodyKey] as string;
+        const meta: Record<string, unknown> = {};
+        for (const [key, entry] of Object.entries(obj)) {
+            if (key === bodyKey) {
+                continue;
+            }
+            if (entry === undefined || entry === null || entry === "") {
+                continue;
+            }
+            meta[key] = entry;
+        }
+        const header = formatMetaHeader(meta);
+        return header ? `${header}\n${body}` : body;
+    }
+
+    return JSON.stringify(obj);
+}
+
+function formatMetaHeader(meta: Record<string, unknown>): string {
+    const parts: string[] = [];
+    for (const [key, value] of Object.entries(meta)) {
+        if (typeof value === "object" && value !== null) {
+            // Keep truncation/page compact on one line
+            parts.push(`${key}=${JSON.stringify(value)}`);
+        } else {
+            parts.push(`${key}=${String(value)}`);
+        }
+    }
+    return parts.join(" ");
 }
 
 export function jsonToolResult(value: unknown, options: { isError?: boolean } = {}) {
     let text: string;
     try {
-        text = JSON.stringify(value, null, 2) ?? "null";
+        text = formatToolText(value);
     } catch (error) {
         return {
             content: [{
@@ -170,28 +224,31 @@ export function jsonToolResult(value: unknown, options: { isError?: boolean } = 
 
     const budgeted = enforceCharBudget(text);
 
-    // When over budget, do not attach the full object as structuredContent (client OOM / drop risk).
+    // Prefer not to double-ship large code bodies in structuredContent when text already holds them.
     let structured: Record<string, unknown>;
-    let finalText = budgeted.text;
     if (budgeted.truncated) {
         structured = {
             _response_truncated: true,
-            _note: `JSON exceeded ${MAX_RESPONSE_CHARS} chars. Text content is truncated; narrow the request.`,
-            _preview: budgeted.text.slice(0, 2000),
+            _note: `Result exceeded ${MAX_RESPONSE_CHARS} chars. Narrow the request.`,
+            _preview: budgeted.text.slice(0, 1500),
         };
-        finalText = budgeted.text;
     } else {
-        structured = toStructured(value);
+        structured = toStructuredCompact(value);
     }
 
     return {
-        content: [{ type: "text" as const, text: finalText }],
+        content: [{ type: "text" as const, text: budgeted.text }],
         structuredContent: structured,
         ...(options.isError ? { isError: true as const } : {}),
     };
 }
 
-function toStructured(value: unknown): Record<string, unknown> {
+/**
+ * structuredContent for machine clients. Code-bearing fields stay present once here;
+ * model-facing text is already code-first (no pretty JSON wrapper), so hosts that only
+ * inject content[] pay the small header + body cost rather than escaped JSON.
+ */
+function toStructuredCompact(value: unknown): Record<string, unknown> {
     if (typeof value === "object" && value !== null && !Array.isArray(value)) {
         return value as Record<string, unknown>;
     }
@@ -212,12 +269,7 @@ export async function runTool<T>(
         return jsonToolResult(
             {
                 error: message,
-                guidance: [
-                    "Do not substitute another Minecraft version unless the user explicitly requested a fallback.",
-                    "Use mc_versions (with query/type) to confirm allowed version ids.",
-                    "Prefer mc_list_members / mc_read_method over full-class reads for large classes.",
-                    "Call mc_prepare_version once before heavy work on a new version.",
-                ],
+                tip: "Confirm version with mc_versions; prefer mc_list_members/mc_read_method; mc_prepare_version for new jars.",
             },
             { isError: true }
         );

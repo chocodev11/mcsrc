@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import * as vf from "@run-slicer/vf";
 import { openJar, type Jar } from "../src/utils/Jar.ts";
@@ -8,8 +9,11 @@ import { DecompileJar, type DecompileResult } from "../src/workers/decompile/typ
 import { searchClasses } from "./classSearch.ts";
 import { createUnifiedDiff, getChangedEntries } from "./diff.ts";
 import {
+    DEFAULT_DIFF_MAX_LINES,
+    DEFAULT_METHOD_MAX_LINES,
     emptyFieldMessage,
     paginate,
+    SEARCH_MATCH_CAP,
     sliceLines,
 } from "./response.ts";
 import { EXPERIMENTAL_VERSIONS, VERSIONS_URL } from "./versions.ts";
@@ -24,6 +28,7 @@ import type {
     ListMembersResult,
     McClassReadResult,
     McMethodReadResult,
+    MethodCandidate,
     PrepareVersionResult,
     SearchClassResult,
     VersionListEntry,
@@ -51,7 +56,28 @@ export const VERSION_POLICY =
     "Classic 1.20/1.21 ids are not listed unless an explicit *_unobfuscated experimental entry exists. " +
     "className uses internal slash form (e.g. net/minecraft/server/MinecraftServer).";
 
-const DEFAULT_CACHE_DIR = ".mcsrc-cache";
+/**
+ * Disk cache for jars / downloads. Never defaults under the process cwd (often the
+ * open agent workspace) — that pollutes repos and can hit git ignore edge cases.
+ * Override with MCSRC_CACHE_DIR or options.cacheDir (absolute path recommended).
+ */
+export function resolveCacheDir(override?: string): string {
+    const fromEnvOrOpt = override ?? process.env.MCSRC_CACHE_DIR;
+    if (fromEnvOrOpt && fromEnvOrOpt.trim()) {
+        return path.resolve(fromEnvOrOpt.trim());
+    }
+    // Windows: %LOCALAPPDATA%\mcsrc
+    // Unix: $XDG_CACHE_HOME/mcsrc or ~/.cache/mcsrc
+    if (process.platform === "win32") {
+        const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+        return path.join(localAppData, "mcsrc");
+    }
+    const xdg = process.env.XDG_CACHE_HOME;
+    if (xdg && xdg.trim()) {
+        return path.join(xdg.trim(), "mcsrc");
+    }
+    return path.join(os.homedir(), ".cache", "mcsrc");
+}
 
 export class MinecraftReferenceService {
     private readonly cacheDir: string;
@@ -62,7 +88,7 @@ export class MinecraftReferenceService {
     private decompileQueue: Promise<void> = Promise.resolve();
 
     constructor(options: ReferenceServiceOptions = {}) {
-        this.cacheDir = path.resolve(options.cacheDir ?? process.env.MCSRC_CACHE_DIR ?? DEFAULT_CACHE_DIR);
+        this.cacheDir = resolveCacheDir(options.cacheDir);
         this.fetchImpl = options.fetchImpl ?? fetch;
     }
 
@@ -90,15 +116,13 @@ export class MinecraftReferenceService {
         const { items, page } = paginate(mapped, options.limit, options.offset);
 
         return {
-            count: items.length,
             versions: items,
             page,
-            policy: VERSION_POLICY,
             message: items.length === 0
-                ? emptyFieldMessage("versions", "no versions matched the filter", [
-                    "Call mc_versions without query to list available ids",
-                    "Try type=unobfuscated for experimental builds",
-                    VERSION_POLICY,
+                ? emptyFieldMessage("versions", "no versions matched", [
+                    "Drop query/type filters",
+                    "type=unobfuscated for experimental builds",
+                    "Only major>=26 + curated unobfuscated ids",
                 ])
                 : undefined,
         };
@@ -116,7 +140,6 @@ export class MinecraftReferenceService {
             version: jar.version,
             status: "ready",
             class_count: classCount,
-            message: `Version ${jar.version} is cached and ready (${classCount} classes).`,
         };
     }
 
@@ -127,22 +150,27 @@ export class MinecraftReferenceService {
         offset = 0
     ): Promise<SearchClassResult> {
         const jar = await this.getJar(version);
-        // Fetch a generous candidate set, then paginate for the agent.
-        const candidates = searchClasses(query, getClassNames(jar.jar), Math.min(500, Math.max(limit + offset, 100)));
+        // Fetch cap+1 so we can report total_capped honestly (not pretend the jar has fewer hits).
+        const ranked = searchClasses(query, getClassNames(jar.jar), SEARCH_MATCH_CAP + 1);
+        const totalCapped = ranked.length > SEARCH_MATCH_CAP;
+        const candidates = totalCapped ? ranked.slice(0, SEARCH_MATCH_CAP) : ranked;
         const { items, page } = paginate(candidates, limit, offset);
 
         return {
-            version,
             query,
             classes: items,
             page,
+            ...(totalCapped
+                ? { total_capped: true, candidate_cap: SEARCH_MATCH_CAP }
+                : {}),
             message: items.length === 0
-                ? emptyFieldMessage("classes", `no class names matched query "${query}"`, [
-                    "Try a shorter simple name (e.g. ServerLevel) or a package path (net/minecraft/server)",
-                    "className results use slash form, not dots",
-                    "Confirm the version with mc_versions / mc_prepare_version",
+                ? emptyFieldMessage("classes", `no match for "${query}"`, [
+                    "Try simple name (ServerLevel) or package path (net/minecraft/server)",
+                    "Results are slash-form names",
                 ])
-                : undefined,
+                : totalCapped
+                    ? `Match list capped at ${SEARCH_MATCH_CAP}; narrow query for completeness`
+                    : undefined,
         };
     }
 
@@ -158,15 +186,12 @@ export class MinecraftReferenceService {
 
         if (!entry) {
             return {
-                version,
                 className: normalizedClassName,
                 mode,
                 status: "missing",
-                checksum: 0,
                 content: `// Class not found: ${normalizedClassName}`,
                 message: emptyFieldMessage("content", `class ${normalizedClassName} not found in ${version}`, [
-                    "Use mc_search_class to find the internal slash name",
-                    "Do not invent package prefixes",
+                    "mc_search_class for slash-form name",
                 ]),
             };
         }
@@ -181,16 +206,12 @@ export class MinecraftReferenceService {
         });
 
         return {
-            version,
             className: normalizedClassName,
             mode,
             status: "found",
-            checksum: result.checksum,
             content: sliced.content,
-            truncation: sliced.truncation,
-            message: sliced.truncation.truncated
-                ? sliced.truncation.note
-                : undefined,
+            truncation: sliced.truncation.truncated ? sliced.truncation : undefined,
+            message: sliced.truncation.truncated ? sliced.truncation.note : undefined,
         };
     }
 
@@ -199,7 +220,8 @@ export class MinecraftReferenceService {
         className: string,
         memberName: string,
         descriptor: string | undefined,
-        mode: Mode
+        mode: Mode,
+        options: { maxLines?: number } = {}
     ): Promise<McMethodReadResult> {
         const jar = await this.getJar(version);
         const normalizedClassName = normalizeClassName(className);
@@ -208,56 +230,22 @@ export class MinecraftReferenceService {
 
         if (!entry) {
             return {
-                version,
                 className: normalizedClassName,
                 memberName: methodName,
                 descriptor,
                 mode,
                 status: "missing",
-                checksum: 0,
                 content: `// Class not found: ${normalizedClassName}`,
-                message: emptyFieldMessage("content", `class ${normalizedClassName} not found in ${version}`, [
-                    "Use mc_search_class to find the internal slash name",
+                message: emptyFieldMessage("content", `class ${normalizedClassName} not found`, [
+                    "mc_search_class for slash-form name",
                 ]),
             };
         }
 
-        const content = mode === "source"
-            ? await this.readSourceMethod(version, normalizedClassName, methodName, descriptor)
-            : await this.readBytecodeMethod(version, normalizedClassName, methodName, descriptor);
-
-        if (!content) {
-            return {
-                version,
-                className: normalizedClassName,
-                memberName: methodName,
-                descriptor,
-                mode,
-                status: "missing",
-                checksum: entry.crc32,
-                content: `// Method not found: ${methodName}${descriptor ?? ""}`,
-                message: emptyFieldMessage(
-                    "content",
-                    `method ${methodName}${descriptor ?? ""} not found on ${normalizedClassName}`,
-                    [
-                        "Call mc_list_members to see exact names and descriptors",
-                        "Pass descriptor when the method is overloaded",
-                        "Constructors are named <init>",
-                    ]
-                ),
-            };
+        if (mode === "source") {
+            return this.readSourceMethodResult(version, normalizedClassName, methodName, descriptor, options);
         }
-
-        return {
-            version,
-            className: normalizedClassName,
-            memberName: methodName,
-            descriptor,
-            mode,
-            status: "found",
-            checksum: entry.crc32,
-            content,
-        };
+        return this.readBytecodeMethodResult(version, normalizedClassName, methodName, descriptor, options);
     }
 
     async listMembers(
@@ -277,14 +265,12 @@ export class MinecraftReferenceService {
         if (!entry) {
             const emptyPage = paginate<ClassMember>([], options.limit, options.offset).page;
             return {
-                version,
                 className: normalizedClassName,
                 status: "missing",
-                checksum: 0,
                 members: [],
                 page: emptyPage,
                 message: emptyFieldMessage("members", `class ${normalizedClassName} not found`, [
-                    "Use mc_search_class first",
+                    "mc_search_class first",
                 ]),
             };
         }
@@ -311,7 +297,6 @@ export class MinecraftReferenceService {
                 name: token.name,
                 descriptor: token.descriptor,
                 line: getLocation(decompiled.source, token.start).line,
-                declaration: token.declaration,
             }))
             // Stable unique by kind+name+descriptor
             .filter((member, index, all) =>
@@ -326,16 +311,13 @@ export class MinecraftReferenceService {
         const { items, page } = paginate(members, options.limit, options.offset);
 
         return {
-            version,
             className: normalizedClassName,
             status: "found",
-            checksum: decompiled.checksum,
             members: items,
             page,
             message: items.length === 0
-                ? emptyFieldMessage("members", "no members matched filters", [
-                    "Try kind=all and drop query",
-                    "Inner-class members may live on Outer$Inner class names",
+                ? emptyFieldMessage("members", "no members matched", [
+                    "kind=all, drop query; inner classes use Outer$Inner",
                 ])
                 : undefined,
         };
@@ -383,12 +365,12 @@ export class MinecraftReferenceService {
             classes: items,
             page,
             message: items.length === 0
-                ? emptyFieldMessage("classes", "no changed classes in this page/filter", [
-                    query ? "Relax or remove query" : "These versions may be identical at class CRC level",
-                    "Increase offset only when has_more is true",
+                ? emptyFieldMessage("classes", "no changed classes in page/filter", [
+                    query ? "Relax query" : "Versions may be CRC-identical",
+                    "Only advance offset when has_more",
                 ])
                 : page.has_more
-                    ? `Showing ${items.length} of ${page.total_count} matched classes. Use offset=${page.next_offset} for more.`
+                    ? `${items.length}/${page.total_count}; offset=${page.next_offset} for more`
                     : undefined,
         };
     }
@@ -445,19 +427,13 @@ export class MinecraftReferenceService {
         options: { maxLines?: number } = {}
     ): Promise<DiffClassResult> {
         const normalizedClassName = normalizeClassName(className);
-        const [left, right, status] = await Promise.all([
-            this.readClass(leftVersion, normalizedClassName, mode, { maxLines: MAX_INTERNAL_READ_LINES }),
-            this.readClass(rightVersion, normalizedClassName, mode, { maxLines: MAX_INTERNAL_READ_LINES }),
-            this.getClassChangeStatus(leftVersion, rightVersion, normalizedClassName),
-        ]);
+        const status = await this.getClassChangeStatus(leftVersion, rightVersion, normalizedClassName);
 
-        // Use full cached decompile text for accurate diffs (not the truncated tool view).
-        const leftFull = left.status === "found"
-            ? await this.readFullClassContent(leftVersion, normalizedClassName, mode)
-            : "";
-        const rightFull = right.status === "found"
-            ? await this.readFullClassContent(rightVersion, normalizedClassName, mode)
-            : "";
+        // Full cached decompile text for accurate diffs (not the truncated tool view).
+        const [leftFull, rightFull] = await Promise.all([
+            this.readFullClassContentIfPresent(leftVersion, normalizedClassName, mode),
+            this.readFullClassContentIfPresent(rightVersion, normalizedClassName, mode),
+        ]);
 
         let rawDiff = status === "unchanged"
             ? ""
@@ -470,41 +446,36 @@ export class MinecraftReferenceService {
 
         let message: string | undefined;
         if (status === "unchanged") {
-            message = emptyFieldMessage("diff", "class CRCs match between versions (no class-level change)", [
-                "Pick a class from mc_changed_classes",
-                "Or verify version ids with mc_versions",
+            message = emptyFieldMessage("diff", "CRCs match (no class-level change)", [
+                "Pick from mc_changed_classes",
             ]);
         } else if (rawDiff.length === 0 && status === "modified" && mode === "source") {
-            rawDiff = "";
             message = emptyFieldMessage(
                 "diff",
-                "decompiled source is identical despite CRC change (bytecode/metadata-only)",
-                ["Retry with mode=bytecode"]
+                "source identical despite CRC change (metadata-only)",
+                ["Retry mode=bytecode"]
             );
         } else if (rawDiff.length === 0) {
-            message = emptyFieldMessage("diff", `status=${status} but textual ${mode} is identical`, [
-                mode === "source" ? "Try mode=bytecode" : "Change may be non-textual (attributes only)",
+            message = emptyFieldMessage("diff", `status=${status} but ${mode} text identical`, [
+                mode === "source" ? "Try mode=bytecode" : "Non-textual change",
             ]);
         }
 
         if (rawDiff.length > 0) {
-            const sliced = sliceLines(rawDiff, { maxLines: options.maxLines ?? 400 });
+            const sliced = sliceLines(rawDiff, { maxLines: options.maxLines ?? DEFAULT_DIFF_MAX_LINES });
             return {
-                leftVersion,
-                rightVersion,
                 className: normalizedClassName,
                 mode,
                 status,
                 diff: sliced.content,
+                truncation: sliced.truncation.truncated ? sliced.truncation : undefined,
                 message: sliced.truncation.truncated
-                    ? `${message ? message + "\n" : ""}${sliced.truncation.note}`
+                    ? [message, sliced.truncation.note].filter(Boolean).join("; ")
                     : message,
             };
         }
 
         return {
-            leftVersion,
-            rightVersion,
             className: normalizedClassName,
             mode,
             status,
@@ -519,15 +490,37 @@ export class MinecraftReferenceService {
         className: string,
         memberName: string,
         descriptor: string | undefined,
-        mode: Mode
+        mode: Mode,
+        options: { maxLines?: number } = {}
     ): Promise<DiffMethodResult> {
         const normalizedClassName = normalizeClassName(className);
         const methodName = memberName.trim();
         const [left, right, status] = await Promise.all([
-            this.readMethod(leftVersion, normalizedClassName, methodName, descriptor, mode),
-            this.readMethod(rightVersion, normalizedClassName, methodName, descriptor, mode),
+            this.readMethod(leftVersion, normalizedClassName, methodName, descriptor, mode, options),
+            this.readMethod(rightVersion, normalizedClassName, methodName, descriptor, mode, options),
             this.getClassChangeStatus(leftVersion, rightVersion, normalizedClassName),
         ]);
+
+        if (left.status === "ambiguous" || right.status === "ambiguous") {
+            const candidates = [
+                ...(left.candidates ?? []),
+                ...(right.candidates ?? []),
+            ];
+            const unique = uniqueCandidates(candidates);
+            return {
+                className: normalizedClassName,
+                memberName: methodName,
+                descriptor,
+                mode,
+                status,
+                leftStatus: left.status,
+                rightStatus: right.status,
+                diff: "",
+                message: emptyFieldMessage("diff", "method name is overloaded", [
+                    `Pass descriptor; candidates: ${unique.map(c => c.descriptor).join(", ")}`,
+                ]),
+            };
+        }
 
         const leftText = left.status === "found" ? left.content : "";
         const rightText = right.status === "found" ? right.content : "";
@@ -535,18 +528,18 @@ export class MinecraftReferenceService {
         let message: string | undefined;
 
         if (left.status === "missing" && right.status === "missing") {
-            message = emptyFieldMessage("diff", "method missing on both versions", [
-                "Use mc_list_members on each version",
+            message = emptyFieldMessage("diff", "method missing on both sides", [
+                "mc_list_members on each version",
             ]);
         } else if (leftText === rightText) {
             message = emptyFieldMessage(
                 "diff",
                 left.status !== right.status
-                    ? `method presence differs (left=${left.status}, right=${right.status}) but text compare is empty`
-                    : "method text is identical between versions",
+                    ? `presence differs (left=${left.status}, right=${right.status})`
+                    : "method text identical",
                 [
                     status === "modified" && mode === "source"
-                        ? "Class CRC changed; try mode=bytecode or mc_diff_class"
+                        ? "CRC changed; try mode=bytecode or mc_diff_class"
                         : "No method-level textual change",
                 ]
             );
@@ -568,17 +561,33 @@ export class MinecraftReferenceService {
             );
         }
 
+        if (diff.length > 0) {
+            const sliced = sliceLines(diff, { maxLines: options.maxLines ?? DEFAULT_DIFF_MAX_LINES });
+            return {
+                className: normalizedClassName,
+                memberName: methodName,
+                descriptor: descriptor ?? left.descriptor ?? right.descriptor,
+                mode,
+                status,
+                leftStatus: left.status,
+                rightStatus: right.status,
+                diff: sliced.content,
+                truncation: sliced.truncation.truncated ? sliced.truncation : undefined,
+                message: sliced.truncation.truncated
+                    ? [message, sliced.truncation.note].filter(Boolean).join("; ")
+                    : message,
+            };
+        }
+
         return {
-            leftVersion,
-            rightVersion,
             className: normalizedClassName,
             memberName: methodName,
-            descriptor,
+            descriptor: descriptor ?? left.descriptor ?? right.descriptor,
             mode,
             status,
             leftStatus: left.status,
             rightStatus: right.status,
-            diff,
+            diff: "",
             message,
         };
     }
@@ -595,85 +604,228 @@ export class MinecraftReferenceService {
         const entry = jar.jar.entries[`${normalizedClassName}.class`];
         if (!entry) {
             return {
-                version,
                 className: normalizedClassName,
-                checksum: 0,
                 memberName,
                 descriptor,
                 snippet: `// Class not found: ${normalizedClassName}`,
-                local_references: [],
-                message: emptyFieldMessage("snippet", "class not found", ["Use mc_search_class"]),
+                message: emptyFieldMessage("snippet", "class not found", ["mc_search_class"]),
             };
         }
 
         const result = await this.decompileClass(jar, normalizedClassName);
-        const token = memberName ? findDeclarationToken(result.tokens, memberName, descriptor) : undefined;
-        const snippet = token ? extractMemberSnippet(result.source, token) : limitLines(result.source, 240);
+        const matches = memberName
+            ? findDeclarationTokens(result.tokens, memberName, descriptor)
+            : [];
+        if (memberName && matches.length > 1 && !descriptor) {
+            return {
+                className: normalizedClassName,
+                memberName,
+                descriptor,
+                snippet: "",
+                message: emptyFieldMessage("snippet", "ambiguous member", [
+                    `Pass descriptor; candidates: ${matches.map(m => m.descriptor).join(", ")}`,
+                ]),
+            };
+        }
+        const token = matches[0];
+        const rawSnippet = token
+            ? extractMemberSnippet(result.source, token)
+            : limitLines(result.source, 100);
+        const sliced = sliceLines(rawSnippet, { maxLines: DEFAULT_METHOD_MAX_LINES });
         const local_references = includeLocalRefs && token
             ? findLocalReferences(result, token)
-            : [];
+            : undefined;
 
         let message: string | undefined;
         if (memberName && !token) {
             message = emptyFieldMessage(
                 "snippet",
-                `declaration for ${memberName}${descriptor ?? ""} not found; returned class head instead`,
-                ["Use mc_list_members for exact names/descriptors"]
+                `no declaration for ${memberName}${descriptor ?? ""}; class head returned`,
+                ["mc_list_members for names/descriptors"]
             );
         } else if (includeLocalRefs) {
-            message = local_references.length === 0
-                ? emptyFieldMessage(
-                    "local_references",
-                    "no same-class reference sites found",
-                    [
-                        "These are NOT jar-wide callers — only references inside this class body",
-                        "Jar-wide find-usages is not available in this MCP yet",
-                    ]
-                )
-                : "local_references lists same-class sites only (not jar-wide callers).";
+            message = !local_references || local_references.length === 0
+                ? emptyFieldMessage("local_references", "none in this class", [
+                    "Same-class only — not jar-wide callers",
+                ])
+                : "local_references are same-class only";
         }
 
         return {
-            version,
             className: normalizedClassName,
-            checksum: result.checksum,
             memberName,
-            descriptor,
-            snippet,
-            local_references,
-            message,
+            descriptor: descriptor ?? token?.descriptor,
+            snippet: sliced.content,
+            ...(local_references && local_references.length > 0 ? { local_references } : {}),
+            message: [message, sliced.truncation.truncated ? sliced.truncation.note : undefined]
+                .filter(Boolean)
+                .join("; ") || undefined,
         };
     }
 
-    private async readFullClassContent(version: string, className: string, mode: Mode): Promise<string> {
+    private async readFullClassContentIfPresent(version: string, className: string, mode: Mode): Promise<string> {
         const jar = await this.getJar(version);
+        if (!jar.jar.entries[`${className}.class`]) {
+            return "";
+        }
         const result = mode === "source"
             ? await this.decompileClass(jar, className)
             : await this.getBytecode(jar, className);
         return result.source;
     }
 
-    private async readSourceMethod(
+    private async readSourceMethodResult(
         version: string,
         className: string,
         memberName: string,
-        descriptor?: string
-    ): Promise<string | undefined> {
+        descriptor: string | undefined,
+        options: { maxLines?: number }
+    ): Promise<McMethodReadResult> {
         const jar = await this.getJar(version);
         const result = await this.decompileClass(jar, className);
-        const token = findMethodDeclarationToken(result.tokens, memberName, descriptor);
-        return token ? extractMemberSnippet(result.source, token) : undefined;
+        const matches = findMethodDeclarationTokens(result.tokens, memberName, descriptor);
+
+        if (matches.length === 0) {
+            return {
+                className,
+                memberName,
+                descriptor,
+                mode: "source",
+                status: "missing",
+                content: `// Method not found: ${memberName}${descriptor ?? ""}`,
+                message: emptyFieldMessage("content", `method ${memberName}${descriptor ?? ""} not found`, [
+                    "mc_list_members; pass descriptor if overloaded; <init> for constructors",
+                ]),
+            };
+        }
+
+        if (matches.length > 1 && !descriptor) {
+            const candidates = matches.map(token => ({
+                name: token.name,
+                descriptor: token.descriptor,
+                line: getLocation(result.source, token.start).line,
+            }));
+            return {
+                className,
+                memberName,
+                mode: "source",
+                status: "ambiguous",
+                content: "",
+                candidates,
+                message: emptyFieldMessage("content", `ambiguous overload of ${memberName}`, [
+                    `Pass descriptor; candidates: ${candidates.map(c => c.descriptor).join(", ")}`,
+                ]),
+            };
+        }
+
+        const token = matches[0];
+        const raw = extractMemberSnippet(result.source, token);
+        const sliced = sliceLines(raw, { maxLines: options.maxLines ?? DEFAULT_METHOD_MAX_LINES });
+        return {
+            className,
+            memberName,
+            descriptor: token.descriptor,
+            mode: "source",
+            status: "found",
+            content: sliced.content,
+            truncation: sliced.truncation.truncated ? sliced.truncation : undefined,
+            message: sliced.truncation.truncated ? sliced.truncation.note : undefined,
+        };
     }
 
-    private async readBytecodeMethod(
+    private async readBytecodeMethodResult(
         version: string,
         className: string,
         memberName: string,
-        descriptor?: string
-    ): Promise<string | undefined> {
+        descriptor: string | undefined,
+        options: { maxLines?: number }
+    ): Promise<McMethodReadResult> {
         const jar = await this.getJar(version);
         const result = await this.getBytecode(jar, className);
-        return extractBytecodeMethodSnippet(result.source, memberName, descriptor);
+        const candidates = listBytecodeMethodCandidates(result.source, memberName);
+
+        if (descriptor) {
+            const content = extractBytecodeMethodSnippet(result.source, memberName, descriptor);
+            if (!content) {
+                return {
+                    className,
+                    memberName,
+                    descriptor,
+                    mode: "bytecode",
+                    status: "missing",
+                    content: `// Method not found: ${memberName}${descriptor}`,
+                    message: emptyFieldMessage("content", `method ${memberName}${descriptor} not found`, [
+                        "mc_list_members; check descriptor",
+                    ]),
+                };
+            }
+            const sliced = sliceLines(content, { maxLines: options.maxLines ?? DEFAULT_METHOD_MAX_LINES });
+            return {
+                className,
+                memberName,
+                descriptor,
+                mode: "bytecode",
+                status: "found",
+                content: sliced.content,
+                truncation: sliced.truncation.truncated ? sliced.truncation : undefined,
+                message: sliced.truncation.truncated ? sliced.truncation.note : undefined,
+            };
+        }
+
+        if (candidates.length === 0) {
+            return {
+                className,
+                memberName,
+                mode: "bytecode",
+                status: "missing",
+                content: `// Method not found: ${memberName}`,
+                message: emptyFieldMessage("content", `method ${memberName} not found`, [
+                    "mc_list_members; pass descriptor if overloaded",
+                ]),
+            };
+        }
+
+        if (candidates.length > 1) {
+            return {
+                className,
+                memberName,
+                mode: "bytecode",
+                status: "ambiguous",
+                content: "",
+                candidates,
+                message: emptyFieldMessage("content", `ambiguous overload of ${memberName}`, [
+                    `Pass descriptor; candidates: ${candidates.map(c => c.descriptor).join(", ")}`,
+                ]),
+            };
+        }
+
+        const chosen = candidates[0];
+        const content = extractBytecodeMethodSnippet(result.source, memberName, chosen.descriptor)
+            ?? extractBytecodeMethodSnippet(result.source, memberName);
+        if (!content) {
+            return {
+                className,
+                memberName,
+                descriptor: chosen.descriptor,
+                mode: "bytecode",
+                status: "missing",
+                content: `// Method not found: ${memberName}`,
+                message: emptyFieldMessage("content", `method ${memberName} not found`, [
+                    "mc_list_members",
+                ]),
+            };
+        }
+        const sliced = sliceLines(content, { maxLines: options.maxLines ?? DEFAULT_METHOD_MAX_LINES });
+        return {
+            className,
+            memberName,
+            descriptor: chosen.descriptor,
+            mode: "bytecode",
+            status: "found",
+            content: sliced.content,
+            truncation: sliced.truncation.truncated ? sliced.truncation : undefined,
+            message: sliced.truncation.truncated ? sliced.truncation.note : undefined,
+        };
     }
 
     private async fetchVersions(): Promise<VersionListEntry[]> {
@@ -879,9 +1031,6 @@ export class MinecraftReferenceService {
     }
 }
 
-/** Large enough for internal full reads used by method extract / diffs. */
-const MAX_INTERNAL_READ_LINES = 100_000;
-
 export function getClassNames(jar: Jar): string[] {
     return Object.keys(jar.entries)
         .filter(name => name.endsWith(".class"))
@@ -1010,8 +1159,8 @@ async function decompileWithTokens(jar: DecompileJar, className: string): Promis
     return { className, checksum, source, tokens, language: "java" };
 }
 
-function findDeclarationToken(tokens: Token[], memberName: string, descriptor?: string): MemberToken | undefined {
-    return tokens.find((token): token is MemberToken => {
+function findDeclarationTokens(tokens: Token[], memberName: string, descriptor?: string): MemberToken[] {
+    return tokens.filter((token): token is MemberToken => {
         if (!token.declaration || (token.type !== "method" && token.type !== "field")) {
             return false;
         }
@@ -1019,13 +1168,21 @@ function findDeclarationToken(tokens: Token[], memberName: string, descriptor?: 
     });
 }
 
-function findMethodDeclarationToken(tokens: Token[], memberName: string, descriptor?: string): MemberToken | undefined {
-    return tokens.find((token): token is MemberToken => {
+function findMethodDeclarationTokens(tokens: Token[], memberName: string, descriptor?: string): MemberToken[] {
+    return tokens.filter((token): token is MemberToken => {
         if (!token.declaration || token.type !== "method") {
             return false;
         }
         return token.name === memberName && (!descriptor || token.descriptor === descriptor);
     });
+}
+
+function uniqueCandidates(candidates: MethodCandidate[]): MethodCandidate[] {
+    return candidates.filter((candidate, index, all) =>
+        all.findIndex(other =>
+            other.name === candidate.name && other.descriptor === candidate.descriptor
+        ) === index
+    );
 }
 
 function extractMemberSnippet(source: string, token: MemberToken): string {
@@ -1133,6 +1290,82 @@ function extractBytecodeMethodSnippet(source: string, memberName: string, descri
     return lines.slice(start, end).join("\n").trimEnd();
 }
 
+/** Collect overload candidates from bytecode disassembly headers. */
+function listBytecodeMethodCandidates(source: string, memberName: string): MethodCandidate[] {
+    const lines = source.split(/\r?\n/);
+    const candidates: MethodCandidate[] = [];
+    for (const line of lines) {
+        if (!matchesBytecodeMethodHeader(line, memberName)) {
+            continue;
+        }
+        const descriptor = extractBytecodeDescriptor(line, memberName);
+        if (!descriptor) {
+            continue;
+        }
+        if (!candidates.some(c => c.descriptor === descriptor)) {
+            candidates.push({ name: memberName, descriptor });
+        }
+    }
+    return candidates;
+}
+
+function extractBytecodeDescriptor(line: string, memberName: string): string | undefined {
+    const trimmed = line.trim();
+    // Common forms: "name(DESC" or "nameDESC" where DESC starts with (
+    const withParen = trimmed.indexOf(`${memberName}(`);
+    if (withParen !== -1) {
+        const fromName = trimmed.slice(withParen + memberName.length);
+        const close = findDescriptorEnd(fromName);
+        if (close !== -1) {
+            return fromName.slice(0, close + 1);
+        }
+    }
+    const idx = trimmed.indexOf(memberName);
+    if (idx === -1) {
+        return undefined;
+    }
+    const after = trimmed.slice(idx + memberName.length);
+    if (after.startsWith("(")) {
+        const close = findDescriptorEnd(after);
+        return close === -1 ? undefined : after.slice(0, close + 1);
+    }
+    return undefined;
+}
+
+function findDescriptorEnd(descriptorStart: string): number {
+    // JVM method descriptor ends at the return type after ')'
+    const closeParen = descriptorStart.indexOf(")");
+    if (closeParen === -1) {
+        return -1;
+    }
+    // include return type token(s) if present on the same header line
+    let i = closeParen + 1;
+    if (i >= descriptorStart.length) {
+        return closeParen;
+    }
+    // return types: V, I, J, ... or L...; or [
+    if (descriptorStart[i] === "L") {
+        const semi = descriptorStart.indexOf(";", i);
+        return semi === -1 ? closeParen : semi;
+    }
+    if (descriptorStart[i] === "[") {
+        while (i < descriptorStart.length && descriptorStart[i] === "[") {
+            i++;
+        }
+        if (descriptorStart[i] === "L") {
+            const semi = descriptorStart.indexOf(";", i);
+            return semi === -1 ? closeParen : semi;
+        }
+        return i < descriptorStart.length ? i : closeParen;
+    }
+    // single-char primitive return
+    if (/[VZBCSIJFD]/.test(descriptorStart[i] ?? "")) {
+        return i;
+    }
+    // Human-readable headers without JVM desc — use "(...)" only
+    return closeParen;
+}
+
 function matchesBytecodeMethodHeader(line: string, memberName: string, descriptor?: string): boolean {
     const trimmed = line.trim();
     if (!trimmed.includes(memberName) || !isBytecodeMethodHeader(line)) {
@@ -1140,7 +1373,8 @@ function matchesBytecodeMethodHeader(line: string, memberName: string, descripto
     }
 
     if (descriptor) {
-        return trimmed.includes(`${memberName}${descriptor}`);
+        return trimmed.includes(`${memberName}${descriptor}`)
+            || trimmed.includes(`${memberName}(${descriptor.startsWith("(") ? descriptor.slice(1) : descriptor}`);
     }
 
     return trimmed.includes(`${memberName}(`) || trimmed.includes(`${memberName}<`);
