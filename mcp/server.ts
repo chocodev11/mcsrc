@@ -24,45 +24,41 @@ const server = new McpServer(
         instructions: [
             "Read-only Minecraft vanilla server-jar reference (decompiled source / bytecode).",
             VERSION_POLICY,
-            "Workflow: mc_versions → mc_prepare_version (once per version) → mc_search_class → mc_list_members → mc_read_method (prefer) or mc_read_class (paginated).",
-            "For version comparisons: mc_changed_classes (paginated) → mc_diff_method (prefer) or mc_diff_class.",
-            "className is internal slash form (net/minecraft/...). Dots accepted and normalized.",
-            "If status=ambiguous, pass descriptor from candidates (or mc_list_members). Do not guess overloads.",
-            "mc_behavior_context local_references are SAME-CLASS only — not jar-wide callers. Prefer mc_read_method unless you need those refs.",
-            "Never substitute another Minecraft version after an error unless the user explicitly asks for a fallback.",
-            "Keep payloads small: prefer methods over classes; use limits/offsets/max_lines.",
+            "Flow: mc_versions → mc_prepare_version (once per version) → mc_search_class → mc_list_members → mc_read_method (prefer) or mc_read_class.",
+            "Compare: mc_changed_classes → mc_diff_method (prefer) or mc_diff_class.",
+            "className is slash form (net/minecraft/...); dots are normalized.",
+            "status=ambiguous → re-call with a descriptor from candidates; never guess overloads.",
+            "Never substitute another version after an error unless the user asks.",
+            "Keep payloads small: methods over classes; use limit/offset/max_lines.",
         ].join(" "),
     }
 );
 
+// Descriptions stay short: defaults/bounds are already in the JSON schema, so repeating
+// them in prose only inflates the per-request tool listing.
 const modeSchema = z.enum(["source", "bytecode"]).default("source")
-    .describe("source = Vineflower decompile (default); bytecode = disassembly for CRC-only/metadata changes");
+    .describe("source = decompile; bytecode = disassembly, for CRC-only/metadata changes");
 
-const versionSchema = z.string().min(1).describe(
-    "Exact version id from mc_versions (e.g. 26.x release id or 1.21.11_unobfuscated). Do not invent ids."
-);
+const versionSchema = z.string().min(1).describe("Version id from mc_versions. Do not invent ids.");
 
-const classNameSchema = z.string().min(1).describe(
-    "Internal class name, preferably slash-separated (net/minecraft/server/MinecraftServer). Dots are normalized to slashes."
-);
+const classNameSchema = z.string().min(1)
+    .describe("Slash form: net/minecraft/server/MinecraftServer (dots normalized)");
 
 const limitSchema = z.number().int().min(1).max(MAX_LIST_LIMIT).default(DEFAULT_LIST_LIMIT)
-    .describe(`Page size (default ${DEFAULT_LIST_LIMIT}, max ${MAX_LIST_LIMIT})`);
+    .describe("Page size");
 
-const offsetSchema = z.number().int().min(0).default(0)
-    .describe("Pagination offset into the full result list");
+const offsetSchema = z.number().int().min(0).default(0).describe("Pagination offset");
 
 const maxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_MAX_LINES)
-    .describe(`Max lines of text to return (default ${DEFAULT_MAX_LINES}, max ${MAX_MAX_LINES})`);
+    .describe("Max lines returned");
 
 const methodMaxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_METHOD_MAX_LINES)
-    .describe(`Max lines of method body (default ${DEFAULT_METHOD_MAX_LINES}, max ${MAX_MAX_LINES})`);
+    .describe("Max lines of method body");
 
 const diffMaxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_DIFF_MAX_LINES)
-    .describe(`Max lines of unified diff (default ${DEFAULT_DIFF_MAX_LINES}, max ${MAX_MAX_LINES})`);
+    .describe("Max diff lines");
 
-const startLineSchema = z.number().int().min(1).default(1)
-    .describe("1-based line number to start reading from (for large classes)");
+const startLineSchema = z.number().int().min(1).default(1).describe("1-based start line");
 
 const annotations = {
     readOnlyHint: true,
@@ -75,11 +71,10 @@ server.registerTool(
     {
         title: "List Minecraft versions",
         description:
-            "List Minecraft versions available under the mcsrc version policy (paginated). " +
-            "Use query/type to filter before other tools. Always resolve version ids here first.",
+            "List available Minecraft versions (paginated). Always resolve version ids here first.",
         inputSchema: z.object({
-            query: z.string().optional().describe("Substring filter on version id or type (e.g. unobfuscated, 26.)"),
-            type: z.string().optional().describe("Exact type filter: release, snapshot, unobfuscated, etc."),
+            query: z.string().optional().describe("Substring filter on id or type"),
+            type: z.string().optional().describe("Exact type: release, snapshot, unobfuscated, ..."),
             limit: limitSchema,
             offset: offsetSchema,
         }),
@@ -97,8 +92,8 @@ server.registerTool(
     {
         title: "Prepare / cache a Minecraft version",
         description:
-            "Download and cache the server runtime jar for a version so later tools are fast. " +
-            "Call once when starting work on a new version. First call can take a long time.",
+            "Download and cache a version's server jar so later tools are fast. " +
+            "Call once per version; the first call can take minutes.",
         inputSchema: z.object({
             version: versionSchema,
         }),
@@ -114,9 +109,8 @@ server.registerTool(
     {
         title: "Search Minecraft classes",
         description:
-            "Search class names in one server jar. Supports simple names (ServerLevel), camel-case acronyms, " +
-            "and package/path queries (net/minecraft/server or net.minecraft.server). " +
-            "Returns paginated slash-form names. If total_capped=true, narrow the query — results are incomplete.",
+            "Search class names in one jar by simple name (ServerLevel), camel-case acronym, or package path. " +
+            "Returns paginated slash-form names. total_capped=true means results are incomplete — narrow the query.",
         inputSchema: z.object({
             version: versionSchema,
             query: z.string().min(1).describe("Simple name, acronym, package path, or partial FQN"),
@@ -135,14 +129,13 @@ server.registerTool(
     {
         title: "List class members",
         description:
-            "List declared methods/fields for a class (name, descriptor, line) without dumping the full source. " +
-            "Prefer this before mc_read_class. Use results with mc_read_method (pass descriptor when overloaded).",
+            "List a class's methods/fields (name, descriptor, line) without dumping source. " +
+            "Use before mc_read_class; feed the descriptor to mc_read_method when overloaded.",
         inputSchema: z.object({
             version: versionSchema,
             className: classNameSchema,
-            kind: z.enum(["method", "field", "all"]).default("all")
-                .describe("Filter to methods, fields, or both"),
-            query: z.string().optional().describe("Optional substring filter on member name or descriptor"),
+            kind: z.enum(["method", "field", "all"]).default("all"),
+            query: z.string().optional().describe("Substring filter on member name or descriptor"),
             limit: limitSchema,
             offset: offsetSchema,
         }),
@@ -160,8 +153,8 @@ server.registerTool(
     {
         title: "Read Minecraft class",
         description:
-            "Read decompiled source or bytecode for a whole class (line-capped). " +
-            "Prefer mc_list_members + mc_read_method for targeted work. Use start_line/max_lines to page large classes.",
+            "Read a whole class as decompiled source or bytecode (line-capped). " +
+            "Prefer mc_list_members + mc_read_method; page large classes with start_line/max_lines.",
         inputSchema: z.object({
             version: versionSchema,
             className: classNameSchema,
@@ -183,14 +176,13 @@ server.registerTool(
     {
         title: "Read Minecraft method",
         description:
-            "Read one method body (decompiled source or bytecode). Preferred over mc_read_class. " +
-            "Pass descriptor when overloaded; constructors are <init>. " +
-            "If status=ambiguous, re-call with descriptor from candidates. Use mc_list_members if missing.",
+            "Read one method body (source or bytecode). Preferred over mc_read_class. " +
+            "status=ambiguous → re-call with a descriptor from candidates; mc_list_members if it is missing.",
         inputSchema: z.object({
             version: versionSchema,
             className: classNameSchema,
-            memberName: z.string().min(1).describe("Method name, e.g. tick or <init>"),
-            descriptor: z.string().optional().describe("JVM descriptor to disambiguate overloads, e.g. (Lnet/minecraft/world/level/Level;)V"),
+            memberName: z.string().min(1).describe("Method name; <init> for constructors"),
+            descriptor: z.string().optional().describe("JVM descriptor for overloads, e.g. (Lnet/minecraft/world/level/Level;)V"),
             mode: modeSchema,
             max_lines: methodMaxLinesSchema,
         }),
@@ -208,14 +200,14 @@ server.registerTool(
     {
         title: "Changed Minecraft classes",
         description:
-            "List classes that changed between two versions using class CRCs (paginated). " +
-            "Returns summary counts plus one page of class names. Always pass limit; use query to focus on a package.",
+            "List classes that changed between two versions by CRC (paginated). " +
+            "Returns summary counts plus one page of names; use query to focus one package.",
         inputSchema: z.object({
-            leftVersion: versionSchema.describe("Older / left version id"),
-            rightVersion: versionSchema.describe("Newer / right version id"),
-            query: z.string().optional().describe("Optional substring filter on class name (e.g. world/level)"),
+            leftVersion: versionSchema.describe("Older version id"),
+            rightVersion: versionSchema.describe("Newer version id"),
+            query: z.string().optional().describe("Substring filter on class name, e.g. world/level"),
             hideSameSize: z.boolean().default(false)
-                .describe("If true, hide modifications where total uncompressed size is unchanged"),
+                .describe("Hide modifications where uncompressed size is unchanged"),
             limit: limitSchema,
             offset: offsetSchema,
         }),
@@ -233,8 +225,8 @@ server.registerTool(
     {
         title: "Diff Minecraft class",
         description:
-            "Unified diff for one class between two versions (line-capped). " +
-            "If source is identical but CRC changed, try mode=bytecode. Prefer mc_diff_method for single methods.",
+            "Unified diff of one class between two versions (line-capped). " +
+            "Source identical but CRC changed → try mode=bytecode. Prefer mc_diff_method.",
         inputSchema: z.object({
             leftVersion: versionSchema,
             rightVersion: versionSchema,
@@ -256,8 +248,8 @@ server.registerTool(
     {
         title: "Diff Minecraft method",
         description:
-            "Unified diff for a single method between two versions (line-capped). " +
-            "Preferred over full-class diffs. Pass descriptor when overloaded; status=ambiguous if not.",
+            "Unified diff of one method between two versions (line-capped). " +
+            "Preferred over full-class diffs. Pass descriptor when overloaded.",
         inputSchema: z.object({
             leftVersion: versionSchema,
             rightVersion: versionSchema,
@@ -283,15 +275,15 @@ server.registerTool(
     {
         title: "Minecraft behavior context",
         description:
-            "Review-oriented snippet for a class or member. Prefer mc_read_method unless you need same-class refs. " +
-            "include_local_refs only finds references inside the SAME class — not jar-wide callers.",
+            "Class/member snippet plus optional reference sites inside the SAME class (not jar-wide callers). " +
+            "Prefer mc_read_method unless you need those refs.",
         inputSchema: z.object({
             version: versionSchema,
             className: classNameSchema,
-            memberName: z.string().optional().describe("Optional method/field name to focus the snippet"),
-            descriptor: z.string().optional().describe("Optional JVM descriptor"),
+            memberName: z.string().optional().describe("Method/field name to focus the snippet"),
+            descriptor: z.string().optional().describe("JVM descriptor"),
             include_local_refs: z.boolean().default(false)
-                .describe("If true, include same-class reference sites only (NOT jar-wide callers)"),
+                .describe("Include same-class reference sites (NOT jar-wide callers)"),
         }),
         annotations,
     },

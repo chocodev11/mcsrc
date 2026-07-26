@@ -97,10 +97,8 @@ export function sliceLines(
 
     const slice = lines.slice(startIndex, startIndex + maxLines);
     const truncated = startIndex > 0 || startIndex + slice.length < totalLines;
-    const endLine = startLine + slice.length - 1;
-    const note = truncated
-        ? `lines ${startLine}-${endLine}/${totalLines}; use start_line/max_lines or mc_read_method`
-        : undefined;
+    // Line numbers live in the `lines=` meta header; the note only carries the next action.
+    const note = truncated ? "truncated; use start_line/max_lines or mc_read_method" : undefined;
 
     let content = slice.join("\n");
     if (truncated) {
@@ -161,13 +159,18 @@ export function emptyFieldMessage(field: string, reason: string, nextSteps: stri
 const BODY_KEYS = ["content", "diff", "snippet"] as const;
 
 /**
- * Format tool results for model context:
- * - Code-bearing results: one-line meta header + raw body (no JSON escaping)
- * - Everything else: compact JSON (no pretty-print)
+ * Format tool results for model context — everything is plain text, never JSON:
+ * - scalar fields collapse into one `key=value` header line
+ * - page/truncation collapse to `page=0-29/1250 next=30` / `lines=1-100/900`
+ * - list payloads become one row per line under a column header
+ * - code bodies are appended raw (no escaping)
  */
 export function formatToolText(value: unknown): string {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    if (typeof value !== "object" || value === null) {
         return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+        return formatList("items", value);
     }
 
     const obj = value as Record<string, unknown>;
@@ -176,36 +179,67 @@ export function formatToolText(value: unknown): string {
         return typeof body === "string" && body.length > 0;
     });
 
-    if (bodyKey) {
-        const body = obj[bodyKey] as string;
-        const meta: Record<string, unknown> = {};
-        for (const [key, entry] of Object.entries(obj)) {
-            if (key === bodyKey) {
-                continue;
-            }
-            if (entry === undefined || entry === null || entry === "") {
-                continue;
-            }
-            meta[key] = entry;
+    const header: string[] = [];
+    const blocks: string[] = [];
+
+    for (const [key, entry] of Object.entries(obj)) {
+        if (key === bodyKey || entry === undefined || entry === null || entry === "") {
+            continue;
         }
-        const header = formatMetaHeader(meta);
-        return header ? `${header}\n${body}` : body;
+        if (key === "page") {
+            header.push(formatPage(entry as PageMeta));
+        } else if (key === "truncation") {
+            header.push(formatTruncation(entry as TruncationMeta));
+        } else if (Array.isArray(entry)) {
+            if (entry.length > 0) {
+                blocks.push(formatList(key, entry));
+            }
+        } else if (typeof entry === "object") {
+            header.push(`${key}=${JSON.stringify(entry)}`);
+        } else {
+            header.push(`${key}=${String(entry)}`);
+        }
     }
 
-    return JSON.stringify(obj);
+    const parts = [header.join(" "), ...blocks];
+    if (bodyKey) {
+        parts.push(obj[bodyKey] as string);
+    }
+    return parts.filter(part => part.length > 0).join("\n");
 }
 
-function formatMetaHeader(meta: Record<string, unknown>): string {
-    const parts: string[] = [];
-    for (const [key, value] of Object.entries(meta)) {
-        if (typeof value === "object" && value !== null) {
-            // Keep truncation/page compact on one line
-            parts.push(`${key}=${JSON.stringify(value)}`);
-        } else {
-            parts.push(`${key}=${String(value)}`);
-        }
+/** `page=0-29/1250 next=30` instead of six JSON fields (count/limit/has_more are derivable). */
+function formatPage(page: PageMeta): string {
+    if (page.count === 0) {
+        return `page=0/${page.total_count}`;
     }
-    return parts.join(" ");
+    const last = page.offset + page.count - 1;
+    const next = page.next_offset === null ? "" : ` next=${page.next_offset}`;
+    return `page=${page.offset}-${last}/${page.total_count}${next}`;
+}
+
+/** `lines=1-100/900`; the note travels in `message`. */
+function formatTruncation(truncation: TruncationMeta): string {
+    const end = truncation.start_line + truncation.returned_lines - 1;
+    return `lines=${truncation.start_line}-${end}/${truncation.total_lines}`;
+}
+
+/** Object rows share one column header; string rows are printed bare. */
+function formatList(key: string, items: readonly unknown[]): string {
+    const first = items[0];
+    if (typeof first !== "object" || first === null || Array.isArray(first)) {
+        return `${key}:\n${items.map(item => String(item)).join("\n")}`;
+    }
+
+    const columns = Object.keys(first as Record<string, unknown>);
+    const rows = items.map(item => {
+        const row = item as Record<string, unknown>;
+        return columns.map(column => {
+            const cell = row[column];
+            return cell === undefined || cell === null || cell === "" ? "-" : String(cell);
+        }).join(" ");
+    });
+    return `${key}[${columns.join(" ")}]:\n${rows.join("\n")}`;
 }
 
 export function jsonToolResult(value: unknown, options: { isError?: boolean } = {}) {
@@ -222,37 +256,12 @@ export function jsonToolResult(value: unknown, options: { isError?: boolean } = 
         };
     }
 
-    const budgeted = enforceCharBudget(text);
-
-    // Prefer not to double-ship large code bodies in structuredContent when text already holds them.
-    let structured: Record<string, unknown>;
-    if (budgeted.truncated) {
-        structured = {
-            _response_truncated: true,
-            _note: `Result exceeded ${MAX_RESPONSE_CHARS} chars. Narrow the request.`,
-            _preview: budgeted.text.slice(0, 1500),
-        };
-    } else {
-        structured = toStructuredCompact(value);
-    }
-
+    // No structuredContent: no tool declares an outputSchema, so it would only re-ship the
+    // same body a second time for hosts that inject both blocks.
     return {
-        content: [{ type: "text" as const, text: budgeted.text }],
-        structuredContent: structured,
+        content: [{ type: "text" as const, text: enforceCharBudget(text).text }],
         ...(options.isError ? { isError: true as const } : {}),
     };
-}
-
-/**
- * structuredContent for machine clients. Code-bearing fields stay present once here;
- * model-facing text is already code-first (no pretty JSON wrapper), so hosts that only
- * inject content[] pay the small header + body cost rather than escaped JSON.
- */
-function toStructuredCompact(value: unknown): Record<string, unknown> {
-    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-        return value as Record<string, unknown>;
-    }
-    return { result: value };
 }
 
 export async function runTool<T>(

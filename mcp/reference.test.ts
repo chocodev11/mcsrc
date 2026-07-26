@@ -164,16 +164,29 @@ describe("MCP response helpers", () => {
         expect(text).not.toContain("  \"content\"");
     });
 
-    it("formats list results as compact JSON", () => {
+    it("formats string lists one per line with a compact page header", () => {
         const text = formatToolText({
             classes: ["a", "b"],
+            page: { total_count: 5, count: 2, offset: 0, limit: 2, has_more: true, next_offset: 2 },
+        });
+        expect(text).toBe("page=0-1/5 next=2\nclasses:\na\nb");
+    });
+
+    it("formats object lists as rows under one column header", () => {
+        const text = formatToolText({
+            className: "net/minecraft/Foo",
+            members: [
+                { kind: "method", name: "tick", descriptor: "()V", line: 12 },
+                { kind: "field", name: "level", descriptor: "Lnet/minecraft/Level;", line: 5 },
+            ],
             page: { total_count: 2, count: 2, offset: 0, limit: 30, has_more: false, next_offset: null },
         });
-        expect(text).toBe(JSON.stringify({
-            classes: ["a", "b"],
-            page: { total_count: 2, count: 2, offset: 0, limit: 30, has_more: false, next_offset: null },
-        }));
-        expect(text).not.toContain("\n  ");
+        expect(text).toBe([
+            "className=net/minecraft/Foo page=0-1/2",
+            "members[kind name descriptor line]:",
+            "method tick ()V 12",
+            "field level Lnet/minecraft/Level; 5",
+        ].join("\n"));
     });
 
     it("jsonToolResult uses compact code-first content text", () => {

@@ -52,9 +52,8 @@ interface ReferenceServiceOptions {
 }
 
 export const VERSION_POLICY =
-    "Only Mojang versions with major >= 26 plus curated experimental/unobfuscated builds are available. " +
-    "Classic 1.20/1.21 ids are not listed unless an explicit *_unobfuscated experimental entry exists. " +
-    "className uses internal slash form (e.g. net/minecraft/server/MinecraftServer).";
+    "Only Mojang versions with major >= 26 plus curated experimental builds are available; " +
+    "classic 1.20/1.21 ids appear only as *_unobfuscated entries.";
 
 /**
  * Disk cache for jars / downloads. Never defaults under the process cwd (often the
@@ -111,7 +110,8 @@ export class MinecraftReferenceService {
         const mapped = versions.map(version => ({
             id: version.id,
             type: version.type,
-            releaseTime: version.releaseTime,
+            // Date only — the clock part of the ISO stamp is never used for version selection.
+            releaseTime: version.releaseTime.slice(0, 10),
         }));
         const { items, page } = paginate(mapped, options.limit, options.offset);
 
