@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { searchClasses } from "./classSearch.ts";
 import { createUnifiedDiff, getChangedEntries } from "./diff.ts";
+import { extractMemberSnippet, findBlockEnd } from "./memberExtraction.ts";
 import {
     clampLimit,
     emptyFieldMessage,
@@ -199,6 +200,53 @@ describe("MCP response helpers", () => {
         expect(text).toContain("line1");
         expect(text).toContain("status=found");
         expect(text).not.toContain('"content":');
+    });
+});
+
+describe("MCP member extraction", () => {
+    it("ignores braces in strings, chars, comments, and text blocks", () => {
+        const source = [
+            "class Example {",
+            "    void run() {",
+            "        String brace = \"}\";",
+            "        char open = '{';",
+            "        // }",
+            "        /* { } */",
+            "        String block = \"\"\"",
+            "            }",
+            "            \"\"\";",
+            "        finish();",
+            "    }",
+            "    void next() {}",
+            "}",
+        ].join("\n");
+        const openBrace = source.indexOf("{", source.indexOf("void run"));
+
+        expect(findBlockEnd(source, openBrace)).toBe(source.indexOf("\n    }", openBrace) + 5);
+        expect(extractMemberSnippet(source, {
+            type: "method",
+            start: source.indexOf("run"),
+            length: 3,
+            className: "Example",
+            declaration: true,
+            name: "run",
+            descriptor: "()V",
+        })).toContain("finish();\n    }");
+    });
+
+    it("ignores delimiters inside a declaration comment", () => {
+        const source = "abstract void run(/* { ; */ int value);\nvoid next() {}";
+        const snippet = extractMemberSnippet(source, {
+            type: "method",
+            start: source.indexOf("run"),
+            length: 3,
+            className: "Example",
+            declaration: true,
+            name: "run",
+            descriptor: "(I)V",
+        });
+
+        expect(snippet).toBe("abstract void run(/* { ; */ int value);");
     });
 });
 

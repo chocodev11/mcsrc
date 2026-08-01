@@ -8,7 +8,7 @@
     "dev:javadoc": "vite --mode javadoc",
     "build": "tsc -b && vite build",
     "build:mcp": "tsc -p tsconfig.mcp.json",
-    "mcp": "tsx mcp/server.ts",
+    "mcp": "node --import tsx mcp/server.ts",
     "build:javadoc": "tsc -b && vite build --mode javadoc",
     "preview": "vite preview",
     "test": "vitest run",

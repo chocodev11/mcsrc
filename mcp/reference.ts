@@ -8,6 +8,7 @@ import type { MemberToken, Token } from "../src/logic/Tokens.ts";
 import { DecompileJar, type DecompileResult } from "../src/workers/decompile/types.ts";
 import { searchClasses } from "./classSearch.ts";
 import { createUnifiedDiff, getChangedEntries } from "./diff.ts";
+import { extractMemberSnippet } from "./memberExtraction.ts";
 import {
     DEFAULT_DIFF_MAX_LINES,
     DEFAULT_METHOD_MAX_LINES,
@@ -36,6 +37,9 @@ import type {
     VersionsList,
     VersionsResult,
 } from "./types.ts";
+
+const vfDecompile = vf.decompile
+    ?? (vf as unknown as { default?: typeof vf }).default?.decompile;
 
 type FetchImpl = typeof fetch;
 type Mode = "source" | "bytecode";
@@ -221,7 +225,7 @@ export class MinecraftReferenceService {
         memberName: string,
         descriptor: string | undefined,
         mode: Mode,
-        options: { maxLines?: number } = {}
+        options: { maxLines?: number; full?: boolean } = {}
     ): Promise<McMethodReadResult> {
         const jar = await this.getJar(version);
         const normalizedClassName = normalizeClassName(className);
@@ -496,8 +500,8 @@ export class MinecraftReferenceService {
         const normalizedClassName = normalizeClassName(className);
         const methodName = memberName.trim();
         const [left, right, status] = await Promise.all([
-            this.readMethod(leftVersion, normalizedClassName, methodName, descriptor, mode, options),
-            this.readMethod(rightVersion, normalizedClassName, methodName, descriptor, mode, options),
+            this.readMethod(leftVersion, normalizedClassName, methodName, descriptor, mode, { full: true }),
+            this.readMethod(rightVersion, normalizedClassName, methodName, descriptor, mode, { full: true }),
             this.getClassChangeStatus(leftVersion, rightVersion, normalizedClassName),
         ]);
 
@@ -679,7 +683,7 @@ export class MinecraftReferenceService {
         className: string,
         memberName: string,
         descriptor: string | undefined,
-        options: { maxLines?: number }
+        options: { maxLines?: number; full?: boolean }
     ): Promise<McMethodReadResult> {
         const jar = await this.getJar(version);
         const result = await this.decompileClass(jar, className);
@@ -720,6 +724,16 @@ export class MinecraftReferenceService {
 
         const token = matches[0];
         const raw = extractMemberSnippet(result.source, token);
+        if (options.full) {
+            return {
+                className,
+                memberName,
+                descriptor: token.descriptor,
+                mode: "source",
+                status: "found",
+                content: raw,
+            };
+        }
         const sliced = sliceLines(raw, { maxLines: options.maxLines ?? DEFAULT_METHOD_MAX_LINES });
         return {
             className,
@@ -738,7 +752,7 @@ export class MinecraftReferenceService {
         className: string,
         memberName: string,
         descriptor: string | undefined,
-        options: { maxLines?: number }
+        options: { maxLines?: number; full?: boolean }
     ): Promise<McMethodReadResult> {
         const jar = await this.getJar(version);
         const result = await this.getBytecode(jar, className);
@@ -757,6 +771,16 @@ export class MinecraftReferenceService {
                     message: emptyFieldMessage("content", `method ${memberName}${descriptor} not found`, [
                         "mc_list_members; check descriptor",
                     ]),
+                };
+            }
+            if (options.full) {
+                return {
+                    className,
+                    memberName,
+                    descriptor,
+                    mode: "bytecode",
+                    status: "found",
+                    content,
                 };
             }
             const sliced = sliceLines(content, { maxLines: options.maxLines ?? DEFAULT_METHOD_MAX_LINES });
@@ -813,6 +837,16 @@ export class MinecraftReferenceService {
                 message: emptyFieldMessage("content", `method ${memberName} not found`, [
                     "mc_list_members",
                 ]),
+            };
+        }
+        if (options.full) {
+            return {
+                className,
+                memberName,
+                descriptor: chosen.descriptor,
+                mode: "bytecode",
+                status: "found",
+                content,
             };
         }
         const sliced = sliceLines(content, { maxLines: options.maxLines ?? DEFAULT_METHOD_MAX_LINES });
@@ -1105,11 +1139,15 @@ async function resolveServerRuntimeJar(versionId: string, serverBlob: Blob): Pro
 async function decompileWithTokens(jar: DecompileJar, className: string): Promise<DecompileResult> {
     ensureNodeDecompilerGlobals();
 
+    if (!vfDecompile) {
+        throw new Error("@run-slicer/vf does not export a decompile function");
+    }
+
     const allTokens = new Map<string, Token[]>();
     let currentContent: string | undefined;
     let currentTokens: Token[] | undefined;
 
-    const sources = await vf.decompile(className, {
+    const sources = await vfDecompile(className, {
         source: async (name) => {
             const data = await jar.proxy[name]?.data;
             return data ?? null;
@@ -1183,36 +1221,6 @@ function uniqueCandidates(candidates: MethodCandidate[]): MethodCandidate[] {
             other.name === candidate.name && other.descriptor === candidate.descriptor
         ) === index
     );
-}
-
-function extractMemberSnippet(source: string, token: MemberToken): string {
-    const lineStart = source.lastIndexOf("\n", token.start) + 1;
-    const openBrace = source.indexOf("{", token.start);
-    const semicolon = source.indexOf(";", token.start);
-
-    if (openBrace === -1 || (semicolon !== -1 && semicolon < openBrace)) {
-        const lineEnd = source.indexOf("\n", token.start);
-        return source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
-    }
-
-    const blockEnd = findBlockEnd(source, openBrace);
-    return source.slice(lineStart, blockEnd === -1 ? source.length : blockEnd + 1);
-}
-
-function findBlockEnd(source: string, openBrace: number): number {
-    let depth = 0;
-    for (let i = openBrace; i < source.length; i++) {
-        const char = source[i];
-        if (char === "{") {
-            depth++;
-        } else if (char === "}") {
-            depth--;
-            if (depth === 0) {
-                return i;
-            }
-        }
-    }
-    return -1;
 }
 
 function findLocalReferences(result: DecompileResult, declaration: MemberToken): string[] {

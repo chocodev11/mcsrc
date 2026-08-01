@@ -44,24 +44,33 @@ const versionSchema = z.string().min(1).describe("Version id from mc_versions. D
 const classNameSchema = z.string().min(1)
     .describe("Slash form: net/minecraft/server/MinecraftServer (dots normalized)");
 
-const limitSchema = z.number().int().min(1).max(MAX_LIST_LIMIT).default(DEFAULT_LIST_LIMIT)
-    .describe("Page size");
+const limitSchema = z.number().default(DEFAULT_LIST_LIMIT)
+    .describe(`Page size; normalized to an integer between 1 and ${MAX_LIST_LIMIT}`);
 
-const offsetSchema = z.number().int().min(0).default(0).describe("Pagination offset");
+const offsetSchema = z.number().default(0)
+    .describe("Pagination offset; normalized to a non-negative integer");
 
-const maxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_MAX_LINES)
-    .describe("Max lines returned");
+const maxLinesSchema = z.number().default(DEFAULT_MAX_LINES)
+    .describe(`Max lines returned; normalized to an integer between 1 and ${MAX_MAX_LINES}`);
 
-const methodMaxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_METHOD_MAX_LINES)
-    .describe("Max lines of method body");
+const methodMaxLinesSchema = z.number().default(DEFAULT_METHOD_MAX_LINES)
+    .describe(`Max lines of method body; normalized to an integer between 1 and ${MAX_MAX_LINES}`);
 
-const diffMaxLinesSchema = z.number().int().min(1).max(MAX_MAX_LINES).default(DEFAULT_DIFF_MAX_LINES)
-    .describe("Max diff lines");
+const diffMaxLinesSchema = z.number().default(DEFAULT_DIFF_MAX_LINES)
+    .describe(`Max diff lines; normalized to an integer between 1 and ${MAX_MAX_LINES}`);
 
-const startLineSchema = z.number().int().min(1).default(1).describe("1-based start line");
+const startLineSchema = z.number().default(1)
+    .describe("1-based start line; normalized to a positive integer");
 
-const annotations = {
+const readOnlyAnnotations = {
     readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+} as const;
+
+const cacheWriteAnnotations = {
+    readOnlyHint: false,
+    destructiveHint: false,
     idempotentHint: true,
     openWorldHint: true,
 } as const;
@@ -78,7 +87,7 @@ server.registerTool(
             limit: limitSchema,
             offset: offsetSchema,
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ query, type, limit, offset }) => {
         return runTool("mc_versions", () => reference.listVersions({ query, type, limit, offset }), {
@@ -97,7 +106,7 @@ server.registerTool(
         inputSchema: z.object({
             version: versionSchema,
         }),
-        annotations,
+        annotations: cacheWriteAnnotations,
     },
     async ({ version }) => {
         return runTool("mc_prepare_version", () => reference.prepareVersion(version));
@@ -117,7 +126,7 @@ server.registerTool(
             limit: limitSchema,
             offset: offsetSchema,
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ version, query, limit, offset }) => {
         return runTool("mc_search_class", () => reference.searchClass(version, query, limit, offset));
@@ -139,7 +148,7 @@ server.registerTool(
             limit: limitSchema,
             offset: offsetSchema,
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ version, className, kind, query, limit, offset }) => {
         return runTool("mc_list_members", () =>
@@ -162,7 +171,7 @@ server.registerTool(
             start_line: startLineSchema,
             max_lines: maxLinesSchema,
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ version, className, mode, start_line, max_lines }) => {
         return runTool("mc_read_class", () =>
@@ -186,7 +195,7 @@ server.registerTool(
             mode: modeSchema,
             max_lines: methodMaxLinesSchema,
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ version, className, memberName, descriptor, mode, max_lines }) => {
         return runTool("mc_read_method", () =>
@@ -211,7 +220,7 @@ server.registerTool(
             limit: limitSchema,
             offset: offsetSchema,
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ leftVersion, rightVersion, query, hideSameSize, limit, offset }) => {
         return runTool("mc_changed_classes", () =>
@@ -234,7 +243,7 @@ server.registerTool(
             mode: modeSchema,
             max_lines: diffMaxLinesSchema,
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ leftVersion, rightVersion, className, mode, max_lines }) => {
         return runTool("mc_diff_class", () =>
@@ -259,7 +268,7 @@ server.registerTool(
             mode: modeSchema,
             max_lines: diffMaxLinesSchema,
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ leftVersion, rightVersion, className, memberName, descriptor, mode, max_lines }) => {
         return runTool("mc_diff_method", () =>
@@ -285,7 +294,7 @@ server.registerTool(
             include_local_refs: z.boolean().default(false)
                 .describe("Include same-class reference sites (NOT jar-wide callers)"),
         }),
-        annotations,
+        annotations: readOnlyAnnotations,
     },
     async ({ version, className, memberName, descriptor, include_local_refs }) => {
         return runTool("mc_behavior_context", () =>
